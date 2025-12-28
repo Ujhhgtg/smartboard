@@ -1,8 +1,12 @@
-use crate::egui_tools::EguiRenderer;
+use crate::render::RenderState;
+use crate::state::{
+    AppState, DynamicBrushMode, InsertedImage, InsertedShape, InsertedText, SelectedObject,
+    ShapeType, Tool,
+};
+use crate::utils::AppUtils;
 use egui::{Color32, Pos2, Shape, Stroke};
-use egui_wgpu::wgpu::{ExperimentalFeatures, SurfaceError};
+use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
-use std::fmt::format;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -10,223 +14,6 @@ use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
-
-pub struct RenderState {
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-    pub surface_config: wgpu::SurfaceConfiguration,
-    pub surface: wgpu::Surface<'static>,
-    pub scale_factor: f32,
-    pub egui_renderer: EguiRenderer,
-}
-
-// 动态画笔模式
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DynamicBrushMode {
-    Disabled,   // 禁用
-    BrushTip,   // 模拟笔锋
-    SpeedBased, // 基于速度
-}
-
-// 工具类型
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Tool {
-    Select,       // 选择
-    Brush,        // 画笔
-    ObjectEraser, // 对象橡皮擦
-    PixelEraser,  // 像素橡皮擦
-    Insert,       // 插入
-    Background,   // 背景
-    Settings,     // 设置
-}
-
-// 插入的图片数据结构
-pub struct InsertedImage {
-    pub texture: egui::TextureHandle,
-    pub pos: Pos2,
-    pub size: egui::Vec2,
-    pub aspect_ratio: f32,
-    pub marked_for_deletion: bool, // deferred deletion to avoid panic
-}
-
-// 插入的文本数据结构
-pub struct InsertedText {
-    pub text: String,
-    pub pos: Pos2,
-    pub color: Color32,
-    pub font_size: f32,
-}
-
-// 插入的形状数据结构
-#[derive(Clone, Copy, Debug)]
-pub enum ShapeType {
-    Line,
-    Arrow,
-    Rectangle,
-    Triangle,
-    Circle,
-}
-
-pub struct InsertedShape {
-    pub shape_type: ShapeType,
-    pub pos: Pos2,
-    pub size: f32,
-    pub color: Color32,
-    pub rotation: f32,
-}
-
-// 被选择的对象
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum SelectedObject {
-    Stroke(usize),
-    Image(usize),
-    Text(usize),
-    Shape(usize),
-}
-
-// 绘图数据结构
-#[derive(Clone)]
-pub struct DrawingStroke {
-    pub points: Vec<Pos2>,
-    pub widths: Vec<f32>, // 每个点的宽度（用于动态画笔）
-    pub color: Color32,
-    pub base_width: f32,
-}
-
-// FPS 计数器
-pub struct FpsCounter {
-    pub frame_count: u32,
-    pub last_time: Instant,
-    pub current_fps: f32,
-}
-
-impl FpsCounter {
-    pub fn new() -> Self {
-        Self {
-            frame_count: 0,
-            last_time: Instant::now(),
-            current_fps: 0.0,
-        }
-    }
-
-    pub fn update(&mut self) -> f32 {
-        self.frame_count += 1;
-
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.last_time).as_secs_f32();
-
-        if elapsed >= 0.5 {
-            self.current_fps = self.frame_count as f32 / elapsed;
-            self.frame_count = 0;
-            self.last_time = now;
-        }
-
-        self.current_fps
-    }
-}
-
-pub struct AppState {
-    pub strokes: Vec<DrawingStroke>,
-    pub images: Vec<InsertedImage>,
-    pub texts: Vec<InsertedText>,
-    pub shapes: Vec<InsertedShape>,
-    pub current_stroke: Option<Vec<Pos2>>,
-    pub current_stroke_widths: Option<Vec<f32>>, // 当前笔画的宽度
-    pub current_stroke_times: Option<Vec<f64>>,  // 每个点的时间戳（用于速度计算）
-    pub stroke_start_time: Option<Instant>,      // 笔画开始时间
-    pub is_drawing: bool,
-    pub brush_color: Color32,
-    pub brush_width: f32,
-    pub dynamic_brush_mode: DynamicBrushMode,
-    pub stroke_smoothing: bool, // 笔画平滑选项
-    pub current_tool: Tool,
-    pub eraser_size: f32,          // 橡皮擦大小
-    pub background_color: Color32, // 背景颜色
-    pub selected_object: Option<SelectedObject>,
-    pub drag_start_pos: Option<Pos2>,
-    pub show_size_preview: bool,
-    pub size_preview_pos: Pos2,
-    pub size_preview_size: f32,
-    pub show_text_dialog: bool,
-    pub new_text_content: String,
-    pub show_shape_dialog: bool,
-    pub show_fps: bool,          // 是否显示FPS
-    pub fps_counter: FpsCounter, // FPS计数器
-    pub should_quit: bool,
-}
-
-impl RenderState {
-    async fn new(
-        instance: &wgpu::Instance,
-        surface: wgpu::Surface<'static>,
-        window: &Window,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        let power_pref = wgpu::PowerPreference::default();
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: power_pref,
-                force_fallback_adapter: false,
-                compatible_surface: Some(&surface),
-            })
-            .await
-            .expect("Failed to find an appropriate adapter");
-
-        let features = wgpu::Features::empty();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: None,
-                required_features: features,
-                required_limits: Default::default(),
-                memory_hints: Default::default(),
-                trace: Default::default(),
-                experimental_features: ExperimentalFeatures::default(),
-            })
-            .await
-            .expect("Failed to create device");
-
-        let swapchain_capabilities = surface.get_capabilities(&adapter);
-        let selected_format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        let swapchain_format = swapchain_capabilities
-            .formats
-            .iter()
-            .find(|d| **d == selected_format)
-            .expect("failed to select proper surface texture format!");
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: *swapchain_format,
-            width,
-            height,
-            present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 0,
-            alpha_mode: swapchain_capabilities.alpha_modes[0],
-            view_formats: vec![],
-        };
-
-        surface.configure(&device, &surface_config);
-
-        let egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
-
-        let scale_factor = 1.0;
-
-        Self {
-            device,
-            queue,
-            surface,
-            surface_config,
-            egui_renderer,
-            scale_factor,
-        }
-    }
-
-    fn resize_surface(&mut self, width: u32, height: u32) {
-        self.surface_config.width = width;
-        self.surface_config.height = height;
-        self.surface.configure(&self.device, &self.surface_config);
-    }
-}
 
 pub struct App {
     instance: wgpu::Instance,
@@ -236,189 +23,17 @@ pub struct App {
 }
 
 impl App {
-    // 检查点是否与笔画相交（用于对象橡皮擦）
-    fn point_intersects_stroke(pos: Pos2, stroke: &DrawingStroke, eraser_size: f32) -> bool {
-        let eraser_radius = eraser_size / 2.0;
-        for i in 0..stroke.points.len() - 1 {
-            let p1 = stroke.points[i];
-            let p2 = stroke.points[i + 1];
-            let stroke_width = if i < stroke.widths.len() {
-                stroke.widths[i].max(
-                    stroke
-                        .widths
-                        .get(i + 1)
-                        .copied()
-                        .unwrap_or(stroke.widths[i]),
-                )
-            } else {
-                stroke.widths[0]
-            };
-
-            // 计算点到线段的距离
-            let dist = Self::point_to_line_segment_distance(pos, p1, p2);
-            if dist <= eraser_radius + stroke_width / 2.0 {
-                return true;
-            }
-        }
-        false
-    }
-
-    // 计算点到线段的最短距离
-    fn point_to_line_segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
-        let ab = Pos2::new(b.x - a.x, b.y - a.y);
-        let ap = Pos2::new(p.x - a.x, p.y - a.y);
-        let ab_sq = ab.x * ab.x + ab.y * ab.y;
-
-        if ab_sq < 0.0001 {
-            // a 和 b 几乎重合
-            return (p.x - a.x).hypot(p.y - a.y);
-        }
-
-        let t = ((ap.x * ab.x + ap.y * ab.y) / ab_sq).max(0.0).min(1.0);
-        let closest = Pos2::new(a.x + t * ab.x, a.y + t * ab.y);
-        (p.x - closest.x).hypot(p.y - closest.y)
-    }
-
-    // 计算动态画笔宽度
-    fn calculate_dynamic_width(
-        base_width: f32,
-        mode: DynamicBrushMode,
-        point_index: usize,
-        total_points: usize,
-        speed: Option<f32>,
-    ) -> f32 {
-        match mode {
-            DynamicBrushMode::Disabled => base_width,
-
-            DynamicBrushMode::BrushTip => {
-                // 模拟笔锋：在笔画末尾逐渐缩小
-                let progress = point_index as f32 / total_points.max(1) as f32;
-                // 在最后 30% 的笔画中逐渐缩小到 40% 的宽度
-                if progress > 0.7 {
-                    let shrink_progress = (progress - 0.7) / 0.3; // 0.0 到 1.0
-                    base_width * (1.0 - shrink_progress * 0.6) // 从 100% 缩小到 40%
-                } else {
-                    base_width
-                }
-            }
-
-            DynamicBrushMode::SpeedBased => {
-                // 基于速度：速度快时变细，速度慢时变粗
-                if let Some(speed_val) = speed {
-                    // 速度范围假设：0-500 像素/秒
-                    // 速度越快，宽度越小（最小到 50%）
-                    // 速度越慢，宽度越大（最大到 150%）
-                    let normalized_speed = (speed_val / 500.0).min(1.0);
-                    base_width * (1.5 - normalized_speed) // 从 150% 到 50%
-                } else {
-                    base_width
-                }
-            }
-        }
-    }
-
-    // 笔画平滑算法 - 使用移动平均和曲线拟合来减少抖动并添加圆角
-    fn apply_stroke_smoothing(points: &[Pos2]) -> Vec<Pos2> {
-        if points.len() < 2 {
-            return points.to_vec();
-        }
-
-        // 第一步：应用移动平均滤波器减少抖动
-        let mut smoothed_points = Vec::with_capacity(points.len());
-
-        // 窗口大小（调整此值以控制平滑强度）
-        let window_size = 3; // 使用3点移动平均
-
-        for i in 0..points.len() {
-            let start_idx = i.saturating_sub(window_size / 2);
-            let end_idx = (i + window_size / 2).min(points.len() - 1);
-
-            let mut sum_x = 0.0;
-            let mut sum_y = 0.0;
-            let mut count = 0;
-
-            for j in start_idx..=end_idx {
-                sum_x += points[j].x;
-                sum_y += points[j].y;
-                count += 1;
-            }
-
-            let avg_x = sum_x / count as f32;
-            let avg_y = sum_y / count as f32;
-            smoothed_points.push(Pos2::new(avg_x, avg_y));
-        }
-
-        // 第二步：添加圆角到起始和结束部分
-        // if smoothed_points.len() >= 2 {
-        //     // 添加起始圆角
-        //     let start_point = smoothed_points[0];
-        //     let second_point = smoothed_points[1];
-        //     let start_dir = (second_point - start_point).normalized();
-
-        //     // 添加几个点来创建圆角效果
-        //     let num_cap_points = 3;
-        //     for i in 1..=num_cap_points {
-        //         let angle = std::f32::consts::PI / 2.0 * (i as f32 / (num_cap_points + 1) as f32);
-        //         let offset_x = start_dir.x * 2.0 * angle.cos() - start_dir.y * 2.0 * angle.sin();
-        //         let offset_y = start_dir.y * 2.0 * angle.cos() + start_dir.x * 2.0 * angle.sin();
-        //         smoothed_points.insert(0, Pos2::new(start_point.x + offset_x, start_point.y + offset_y));
-        //     }
-
-        //     // 添加结束圆角
-        //     let end_point = smoothed_points[smoothed_points.len() - 1];
-        //     let second_last_point = smoothed_points[smoothed_points.len() - 2];
-        //     let end_dir = (end_point - second_last_point).normalized();
-
-        //     for i in 1..=num_cap_points {
-        //         let angle = std::f32::consts::PI / 2.0 * (i as f32 / (num_cap_points + 1) as f32);
-        //         let offset_x = end_dir.x * 2.0 * angle.cos() + end_dir.y * 2.0 * angle.sin();
-        //         let offset_y = end_dir.y * 2.0 * angle.cos() - end_dir.x * 2.0 * angle.sin();
-        //         smoothed_points.push(Pos2::new(end_point.x + offset_x, end_point.y + offset_y));
-        //     }
-        // }
-
-        smoothed_points
-    }
-
     pub fn new() -> Self {
         let instance = egui_wgpu::wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         Self {
             instance,
             render_state: None,
             window: None,
-            state: AppState {
-                strokes: Vec::new(),
-                images: Vec::new(),
-                texts: Vec::new(),
-                shapes: Vec::new(),
-                current_stroke: None,
-                current_stroke_widths: None,
-                current_stroke_times: None,
-                stroke_start_time: None,
-                is_drawing: false,
-                brush_color: Color32::WHITE,
-                brush_width: 5.0,
-                dynamic_brush_mode: DynamicBrushMode::Disabled,
-                stroke_smoothing: true,
-                current_tool: Tool::Brush,
-                eraser_size: 10.0,
-                background_color: Color32::from_rgb(16, 80, 60),
-                selected_object: None,
-                drag_start_pos: None,
-                show_size_preview: false,
-                size_preview_pos: Pos2::new(50.0, 50.0),
-                size_preview_size: 5.0,
-                show_fps: false,
-                fps_counter: FpsCounter::new(),
-                should_quit: false,
-                show_text_dialog: false,
-                new_text_content: String::from(""),
-                show_shape_dialog: false,
-            },
+            state: AppState::default(),
         }
     }
 
-    async fn set_window(&mut self, window: Window) {
+    pub async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
 
         // 设置标题
@@ -571,17 +186,6 @@ impl App {
                         }
                     });
 
-                    // 设置工具相关设置
-                    if self.state.current_tool == Tool::Settings {
-                        ui.horizontal(|ui| {
-                            ui.label("显示 FPS:");
-                            ui.checkbox(&mut self.state.show_fps, "启用");
-                            if ui.button("调试: 引发异常").clicked() {
-                                panic!("test panic")
-                            }
-                        });
-                    }
-
                     ui.separator();
 
                     // 画笔相关设置
@@ -600,12 +204,14 @@ impl App {
                                             self.state.current_stroke_widths.take()
                                         {
                                             if points.len() > 1 {
-                                                self.state.strokes.push(DrawingStroke {
-                                                    points,
-                                                    widths,
-                                                    color: old_color,
-                                                    base_width: self.state.brush_width,
-                                                });
+                                                self.state.strokes.push(
+                                                    crate::state::DrawingStroke {
+                                                        points,
+                                                        widths,
+                                                        color: old_color,
+                                                        base_width: self.state.brush_width,
+                                                    },
+                                                );
                                             }
                                         }
                                     }
@@ -866,6 +472,17 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label("颜色:");
                             ui.color_edit_button_srgba(&mut self.state.background_color);
+                        });
+                    }
+
+                    // 设置工具相关设置
+                    if self.state.current_tool == Tool::Settings {
+                        ui.horizontal(|ui| {
+                            ui.label("显示 FPS:");
+                            ui.checkbox(&mut self.state.show_fps, "启用");
+                            if ui.button("调试: 引发异常").clicked() {
+                                panic!("test panic")
+                            }
                         });
                     }
 
@@ -1211,7 +828,8 @@ impl App {
                                 for (i, img) in self.state.images.iter().enumerate().rev() {
                                     let img_rect = egui::Rect::from_min_size(img.pos, img.size);
                                     if img_rect.contains(pos) {
-                                        self.state.selected_object = Some(SelectedObject::Image(i));
+                                        self.state.selected_object =
+                                            Some(crate::state::SelectedObject::Image(i));
                                         break;
                                     }
                                 }
@@ -1231,7 +849,8 @@ impl App {
 
                                     let text_rect = egui::Rect::from_min_size(text.pos, text_size);
                                     if text_rect.contains(pos) {
-                                        self.state.selected_object = Some(SelectedObject::Text(i));
+                                        self.state.selected_object =
+                                            Some(crate::state::SelectedObject::Text(i));
                                         break;
                                     }
                                 }
@@ -1300,7 +919,7 @@ impl App {
 
                                         if shape_rect.contains(pos) {
                                             self.state.selected_object =
-                                                Some(SelectedObject::Shape(i));
+                                                Some(crate::state::SelectedObject::Shape(i));
                                             break;
                                         }
                                     }
@@ -1309,9 +928,9 @@ impl App {
                                 // 检查笔画
                                 if self.state.selected_object.is_none() {
                                     for (i, stroke) in self.state.strokes.iter().enumerate().rev() {
-                                        if Self::point_intersects_stroke(pos, stroke, 10.0) {
+                                        if AppUtils::point_intersects_stroke(pos, stroke, 10.0) {
                                             self.state.selected_object =
-                                                Some(SelectedObject::Stroke(i));
+                                                Some(crate::state::SelectedObject::Stroke(i));
                                             break;
                                         }
                                     }
@@ -1329,7 +948,7 @@ impl App {
                                 }
                                 if !hit {
                                     for stroke in &self.state.strokes {
-                                        if Self::point_intersects_stroke(pos, stroke, 10.0) {
+                                        if AppUtils::point_intersects_stroke(pos, stroke, 10.0) {
                                             hit = true;
                                             break;
                                         }
@@ -1347,24 +966,24 @@ impl App {
                                 self.state.drag_start_pos = Some(pos);
 
                                 match self.state.selected_object {
-                                    Some(SelectedObject::Image(idx)) => {
+                                    Some(crate::state::SelectedObject::Image(idx)) => {
                                         if let Some(img) = self.state.images.get_mut(idx) {
                                             img.pos += delta;
                                         }
                                     }
-                                    Some(SelectedObject::Stroke(idx)) => {
+                                    Some(crate::state::SelectedObject::Stroke(idx)) => {
                                         if let Some(stroke) = self.state.strokes.get_mut(idx) {
                                             for p in &mut stroke.points {
                                                 *p += delta;
                                             }
                                         }
                                     }
-                                    Some(SelectedObject::Text(idx)) => {
+                                    Some(crate::state::SelectedObject::Text(idx)) => {
                                         if let Some(text) = self.state.texts.get_mut(idx) {
                                             text.pos += delta;
                                         }
                                     }
-                                    Some(SelectedObject::Shape(idx)) => {
+                                    Some(crate::state::SelectedObject::Shape(idx)) => {
                                         if let Some(shape) = self.state.shapes.get_mut(idx) {
                                             shape.pos += delta;
                                         }
@@ -1483,7 +1102,7 @@ impl App {
                                 // 删除笔画
                                 let mut to_remove = Vec::new();
                                 for (i, stroke) in self.state.strokes.iter().enumerate().rev() {
-                                    if Self::point_intersects_stroke(
+                                    if AppUtils::point_intersects_stroke(
                                         pos,
                                         stroke,
                                         self.state.eraser_size,
@@ -1565,7 +1184,7 @@ impl App {
                                     let start_time = Instant::now();
                                     self.state.stroke_start_time = Some(start_time);
                                     self.state.current_stroke_times = Some(vec![0.0]);
-                                    let width = Self::calculate_dynamic_width(
+                                    let width = AppUtils::calculate_dynamic_width(
                                         self.state.brush_width,
                                         self.state.dynamic_brush_mode,
                                         0,
@@ -1617,7 +1236,7 @@ impl App {
                                                     times.push(current_time);
 
                                                     // 计算动态宽度
-                                                    let width = Self::calculate_dynamic_width(
+                                                    let width = AppUtils::calculate_dynamic_width(
                                                         self.state.brush_width,
                                                         self.state.dynamic_brush_mode,
                                                         points.len() - 1,
@@ -1639,12 +1258,12 @@ impl App {
                                         if points.len() > 1 && widths.len() == points.len() {
                                             // 应用笔画平滑
                                             let final_points = if self.state.stroke_smoothing {
-                                                Self::apply_stroke_smoothing(&points)
+                                                AppUtils::apply_stroke_smoothing(&points)
                                             } else {
                                                 points
                                             };
 
-                                            self.state.strokes.push(DrawingStroke {
+                                            self.state.strokes.push(crate::state::DrawingStroke {
                                                 points: final_points,
                                                 widths,
                                                 color: self.state.brush_color,
@@ -1693,7 +1312,7 @@ impl App {
                                                 points.push(pos);
                                                 times.push(current_time);
 
-                                                let width = Self::calculate_dynamic_width(
+                                                let width = AppUtils::calculate_dynamic_width(
                                                     self.state.brush_width,
                                                     self.state.dynamic_brush_mode,
                                                     points.len() - 1,
