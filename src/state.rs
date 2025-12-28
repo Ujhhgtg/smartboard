@@ -3,6 +3,14 @@ use egui::Pos2;
 use std::collections::HashMap;
 use std::time::Instant;
 
+// 窗口模式
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum WindowMode {
+    Windowed,          // 窗口模式
+    Fullscreen,        // 全屏模式
+    BorderlessFullscreen, // 无边框全屏模式
+}
+
 // 动态画笔模式
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DynamicBrushMode {
@@ -108,16 +116,21 @@ impl FpsCounter {
     }
 }
 
+// 单个正在绘制的笔画数据
+pub struct ActiveStroke {
+    pub points: Vec<Pos2>,
+    pub widths: Vec<f32>, // 每个点的宽度（用于动态画笔）
+    pub times: Vec<f64>,  // 每个点的时间戳（用于速度计算）
+    pub start_time: Instant, // 笔画开始时间
+}
+
 // 应用程序状态
 pub struct AppState {
     pub strokes: Vec<DrawingStroke>,
     pub images: Vec<InsertedImage>,
     pub texts: Vec<InsertedText>,
     pub shapes: Vec<InsertedShape>,
-    pub current_stroke: Option<Vec<Pos2>>,
-    pub current_stroke_widths: Option<Vec<f32>>, // 当前笔画的宽度
-    pub current_stroke_times: Option<Vec<f64>>,  // 每个点的时间戳（用于速度计算）
-    pub stroke_start_time: Option<Instant>,      // 笔画开始时间
+    pub active_strokes: HashMap<u64, ActiveStroke>, // 多点触控笔画，存储触控 ID 到正在绘制的笔画
     pub is_drawing: bool,
     pub brush_color: Color32,
     pub brush_width: f32,
@@ -136,6 +149,8 @@ pub struct AppState {
     pub fps_counter: FpsCounter, // FPS计数器
     pub should_quit: bool,
     pub touch_points: HashMap<u64, Pos2>, // 多点触控点，存储触控 ID 到位置的映射
+    pub window_mode: WindowMode, // 窗口模式
+    pub window_mode_changed: bool, // 窗口模式是否已更改
 }
 
 impl Default for AppState {
@@ -145,10 +160,7 @@ impl Default for AppState {
             images: Vec::new(),
             texts: Vec::new(),
             shapes: Vec::new(),
-            current_stroke: None,
-            current_stroke_widths: None,
-            current_stroke_times: None,
-            stroke_start_time: None,
+            active_strokes: HashMap::new(),
             is_drawing: false,
             brush_color: Color32::WHITE,
             brush_width: 5.0,
@@ -167,6 +179,8 @@ impl Default for AppState {
             new_text_content: String::from(""),
             show_shape_dialog: false,
             touch_points: HashMap::new(),
+            window_mode: WindowMode::BorderlessFullscreen,
+            window_mode_changed: false,
         }
     }
 }

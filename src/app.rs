@@ -1,7 +1,7 @@
 use crate::render::RenderState;
 use crate::state::{
     AppState, DynamicBrushMode, InsertedImage, InsertedShape, InsertedText, SelectedObject,
-    ShapeType, Tool,
+    ShapeType, Tool, WindowMode,
 };
 use crate::utils::AppUtils;
 use egui::{Color32, Pos2, Shape, Stroke};
@@ -39,11 +39,10 @@ impl App {
         // 设置标题
         window.set_title("smartboard");
 
-        // 设置全屏模式
-        let monitor = window.current_monitor();
-        window.set_fullscreen(Some(Fullscreen::Borderless(monitor)));
+        // 设置窗口模式
+        self.apply_window_mode(&window);
 
-        // 获取全屏后的实际尺寸
+        // 获取窗口尺寸
         let size = window.inner_size();
         let initial_width = size.width;
         let initial_height = size.height;
@@ -64,6 +63,30 @@ impl App {
 
         self.window.get_or_insert(window);
         self.render_state.get_or_insert(state);
+    }
+
+    fn apply_window_mode(&self, window: &Arc<Window>) {
+        match self.state.window_mode {
+            WindowMode::Windowed => {
+                // 窗口模式 - 设置固定大小
+                window.set_fullscreen(None);
+            }
+            WindowMode::Fullscreen => {
+                // 全屏模式
+                if let Some(monitor) = window.current_monitor() {
+                    let video_mode = monitor.video_modes().next();
+                    if let Some(mode) = video_mode {
+                        window.set_fullscreen(Some(Fullscreen::Exclusive(mode)));
+                    }
+                }
+            }
+            WindowMode::BorderlessFullscreen => {
+                // 无边框全屏模式
+                if let Some(monitor) = window.current_monitor() {
+                    window.set_fullscreen(Some(Fullscreen::Borderless(Some(monitor))));
+                }
+            }
+        }
     }
 
     fn handle_resized(&mut self, width: u32, height: u32) {
@@ -197,26 +220,20 @@ impl App {
                                 .color_edit_button_srgba(&mut self.state.brush_color)
                                 .changed()
                             {
-                                // 颜色改变时，如果正在绘制，结束当前笔画（使用旧颜色）
+                                // 颜色改变时，如果正在绘制，结束所有当前笔画（使用旧颜色）
                                 if self.state.is_drawing {
-                                    if let Some(points) = self.state.current_stroke.take() {
-                                        if let Some(widths) =
-                                            self.state.current_stroke_widths.take()
-                                        {
-                                            if points.len() > 1 {
-                                                self.state.strokes.push(
-                                                    crate::state::DrawingStroke {
-                                                        points,
-                                                        widths,
-                                                        color: old_color,
-                                                        base_width: self.state.brush_width,
-                                                    },
-                                                );
-                                            }
+                                    for (_touch_id, active_stroke) in
+                                        self.state.active_strokes.drain()
+                                    {
+                                        if active_stroke.points.len() > 1 {
+                                            self.state.strokes.push(crate::state::DrawingStroke {
+                                                points: active_stroke.points,
+                                                widths: active_stroke.widths,
+                                                color: old_color,
+                                                base_width: self.state.brush_width,
+                                            });
                                         }
                                     }
-                                    self.state.current_stroke_times = None;
-                                    self.state.stroke_start_time = None;
                                     self.state.is_drawing = false;
                                 }
                             }
@@ -286,9 +303,10 @@ impl App {
                                 self.state.strokes.clear();
                                 self.state.images.clear();
                                 self.state.texts.clear();
-                                self.state.current_stroke = None;
+                                self.state.active_strokes.clear();
                                 self.state.is_drawing = false;
                                 self.state.selected_object = None;
+                                self.state.current_tool = Tool::Brush;
                             }
                         });
                     }
@@ -476,6 +494,38 @@ impl App {
                             ui.checkbox(&mut self.state.show_fps, "启用");
                             if ui.button("调试: 引发异常").clicked() {
                                 panic!("test panic")
+                            }
+                        });
+
+                        ui.separator();
+
+                        ui.horizontal(|ui| {
+                            ui.label("窗口模式:");
+                            let old_mode = self.state.window_mode;
+                            let mode_changed = ui
+                                .selectable_value(
+                                    &mut self.state.window_mode,
+                                    WindowMode::Windowed,
+                                    "窗口",
+                                )
+                                .changed()
+                                || ui
+                                    .selectable_value(
+                                        &mut self.state.window_mode,
+                                        WindowMode::Fullscreen,
+                                        "全屏",
+                                    )
+                                    .changed()
+                                || ui
+                                    .selectable_value(
+                                        &mut self.state.window_mode,
+                                        WindowMode::BorderlessFullscreen,
+                                        "无边框全屏",
+                                    )
+                                    .changed();
+
+                            if mode_changed && self.state.window_mode != old_mode {
+                                self.state.window_mode_changed = true;
                             }
                         });
                     }
@@ -700,36 +750,39 @@ impl App {
                     }
                 }
 
-                // 绘制当前正在绘制的笔画 - 支持动态宽度
-                if let Some(ref points) = self.state.current_stroke {
-                    if let Some(ref widths) = self.state.current_stroke_widths {
-                        if points.len() >= 2 && widths.len() == points.len() {
-                            // 检查是否所有宽度相同
-                            let all_same_width =
-                                widths.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01);
+                // 绘制当前正在绘制的笔画 - 支持多点触控和动态宽度
+                for (_touch_id, active_stroke) in &self.state.active_strokes {
+                    if active_stroke.points.len() >= 2
+                        && active_stroke.widths.len() == active_stroke.points.len()
+                    {
+                        // 检查是否所有宽度相同
+                        let all_same_width = active_stroke
+                            .widths
+                            .windows(2)
+                            .all(|w| (w[0] - w[1]).abs() < 0.01);
 
-                            if all_same_width && points.len() == 2 {
-                                // 只有两个点且宽度相同
+                        if all_same_width && active_stroke.points.len() == 2 {
+                            // 只有两个点且宽度相同
+                            painter.line_segment(
+                                [active_stroke.points[0], active_stroke.points[1]],
+                                Stroke::new(active_stroke.widths[0], self.state.brush_color),
+                            );
+                        } else if all_same_width {
+                            // 多个点但宽度相同
+                            let path = egui::epaint::PathShape::line(
+                                active_stroke.points.clone(),
+                                Stroke::new(active_stroke.widths[0], self.state.brush_color),
+                            );
+                            painter.add(Shape::Path(path));
+                        } else {
+                            // 宽度不同，分段绘制
+                            for i in 0..active_stroke.points.len() - 1 {
+                                let avg_width =
+                                    (active_stroke.widths[i] + active_stroke.widths[i + 1]) / 2.0;
                                 painter.line_segment(
-                                    [points[0], points[1]],
-                                    Stroke::new(widths[0], self.state.brush_color),
+                                    [active_stroke.points[i], active_stroke.points[i + 1]],
+                                    Stroke::new(avg_width, self.state.brush_color),
                                 );
-                            } else if all_same_width {
-                                // 多个点但宽度相同
-                                let path = egui::epaint::PathShape::line(
-                                    points.clone(),
-                                    Stroke::new(widths[0], self.state.brush_color),
-                                );
-                                painter.add(Shape::Path(path));
-                            } else {
-                                // 宽度不同，分段绘制
-                                for i in 0..points.len() - 1 {
-                                    let avg_width = (widths[i] + widths[i + 1]) / 2.0;
-                                    painter.line_segment(
-                                        [points[i], points[i + 1]],
-                                        Stroke::new(avg_width, self.state.brush_color),
-                                    );
-                                }
                             }
                         }
                     }
@@ -745,7 +798,11 @@ impl App {
                 // 绘制多点触控点
                 for (id, pos) in &self.state.touch_points {
                     // 绘制触控点
-                    painter.circle_filled(*pos, 15.0, Color32::from_rgba_unmultiplied(255, 255, 255, 180));
+                    painter.circle_filled(
+                        *pos,
+                        15.0,
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 180),
+                    );
                     painter.circle_stroke(*pos, 15.0, Stroke::new(2.0, Color32::BLUE));
 
                     // 绘制触控ID
@@ -754,7 +811,10 @@ impl App {
                         egui::FontId::proportional(14.0),
                         Color32::BLACK,
                     );
-                    let text_pos = Pos2::new(pos.x - text_galley.size().x / 2.0, pos.y - text_galley.size().y / 2.0);
+                    let text_pos = Pos2::new(
+                        pos.x - text_galley.size().x / 2.0,
+                        pos.y - text_galley.size().y / 2.0,
+                    );
                     let text_shape = egui::epaint::TextShape {
                         pos: text_pos,
                         galley: text_galley,
@@ -962,7 +1022,19 @@ impl App {
                         if response.drag_started() {
                             if let Some(pos) = pointer_pos {
                                 self.state.is_drawing = true;
-                                self.state.current_stroke = Some(vec![pos]);
+                                let start_time = Instant::now();
+
+                                // 使用特殊的 touch_id 0 表示鼠标输入
+                                let touch_id = 0;
+                                self.state.active_strokes.insert(
+                                    touch_id,
+                                    crate::state::ActiveStroke {
+                                        points: vec![pos],
+                                        widths: vec![self.state.brush_width],
+                                        times: vec![0.0],
+                                        start_time,
+                                    },
+                                );
                             }
                         } else if response.dragged() {
                             if self.state.is_drawing {
@@ -974,11 +1046,16 @@ impl App {
                                         self.state.eraser_size,
                                     );
 
-                                    if let Some(ref mut points) = self.state.current_stroke {
-                                        if points.is_empty()
-                                            || points.last().unwrap().distance(pos) > 1.0
+                                    // 使用特殊的 touch_id 0 表示鼠标输入
+                                    let touch_id = 0;
+                                    if let Some(active_stroke) =
+                                        self.state.active_strokes.get_mut(&touch_id)
+                                    {
+                                        if active_stroke.points.is_empty()
+                                            || active_stroke.points.last().unwrap().distance(pos)
+                                                > 1.0
                                         {
-                                            points.push(pos);
+                                            active_stroke.points.push(pos);
                                         }
                                     }
 
@@ -1007,13 +1084,17 @@ impl App {
                                 }
                             }
                         } else if response.drag_stopped() {
-                            self.state.is_drawing = false;
-                            self.state.current_stroke = None;
+                            // 使用特殊的 touch_id 0 表示鼠标输入
+                            let touch_id = 0;
+                            self.state.active_strokes.remove(&touch_id);
+
+                            // 检查是否还有其他正在绘制的笔画
+                            self.state.is_drawing = !self.state.active_strokes.is_empty();
                         }
                     }
 
                     Tool::Brush => {
-                        // 画笔工具
+                        // 画笔工具 - 支持多点触控
                         if response.drag_started() {
                             // 开始新的笔画
                             if let Some(pos) = pointer_pos {
@@ -1023,10 +1104,7 @@ impl App {
                                     && pos.y <= rect.max.y
                                 {
                                     self.state.is_drawing = true;
-                                    self.state.current_stroke = Some(vec![pos]);
                                     let start_time = Instant::now();
-                                    self.state.stroke_start_time = Some(start_time);
-                                    self.state.current_stroke_times = Some(vec![0.0]);
                                     let width = AppUtils::calculate_dynamic_width(
                                         self.state.brush_width,
                                         self.state.dynamic_brush_mode,
@@ -1034,61 +1112,66 @@ impl App {
                                         1,
                                         None,
                                     );
-                                    self.state.current_stroke_widths = Some(vec![width]);
+
+                                    // 使用特殊的 touch_id 0 表示鼠标输入
+                                    let touch_id = 0;
+                                    self.state.active_strokes.insert(
+                                        touch_id,
+                                        crate::state::ActiveStroke {
+                                            points: vec![pos],
+                                            widths: vec![width],
+                                            times: vec![0.0],
+                                            start_time,
+                                        },
+                                    );
                                 }
                             }
                         } else if response.dragged() {
                             // 继续绘制
                             if self.state.is_drawing {
                                 if let Some(pos) = pointer_pos {
-                                    if let Some(ref mut points) = self.state.current_stroke {
-                                        if let Some(ref mut widths) =
-                                            self.state.current_stroke_widths
+                                    // 使用特殊的 touch_id 0 表示鼠标输入
+                                    let touch_id = 0;
+                                    if let Some(active_stroke) =
+                                        self.state.active_strokes.get_mut(&touch_id)
+                                    {
+                                        let current_time =
+                                            active_stroke.start_time.elapsed().as_secs_f64();
+
+                                        // 只添加与上一个点距离足够远的点，避免点太密集
+                                        if active_stroke.points.is_empty()
+                                            || active_stroke.points.last().unwrap().distance(pos)
+                                                > 1.0
                                         {
-                                            if let Some(ref mut times) =
-                                                self.state.current_stroke_times
+                                            // 计算速度（像素/秒）
+                                            let speed = if active_stroke.points.len() > 0
+                                                && active_stroke.times.len() > 0
                                             {
-                                                // 只添加与上一个点距离足够远的点，避免点太密集
-                                                if points.is_empty()
-                                                    || points.last().unwrap().distance(pos) > 1.0
-                                                {
-                                                    let current_time = if let Some(start) =
-                                                        self.state.stroke_start_time
-                                                    {
-                                                        start.elapsed().as_secs_f64()
-                                                    } else {
-                                                        0.0
-                                                    };
+                                                let last_time = active_stroke.times.last().unwrap();
+                                                let time_delta =
+                                                    ((current_time - last_time) as f32).max(0.001); // 避免除零
+                                                let distance = active_stroke
+                                                    .points
+                                                    .last()
+                                                    .unwrap()
+                                                    .distance(pos);
+                                                Some(distance / time_delta)
+                                            } else {
+                                                None
+                                            };
 
-                                                    // 计算速度（像素/秒）
-                                                    let speed = if points.len() > 0
-                                                        && times.len() > 0
-                                                    {
-                                                        let last_time = times.last().unwrap();
-                                                        let time_delta =
-                                                            ((current_time - last_time) as f32)
-                                                                .max(0.001); // 避免除零
-                                                        let distance =
-                                                            points.last().unwrap().distance(pos);
-                                                        Some(distance / time_delta)
-                                                    } else {
-                                                        None
-                                                    };
+                                            active_stroke.points.push(pos);
+                                            active_stroke.times.push(current_time);
 
-                                                    points.push(pos);
-                                                    times.push(current_time);
-
-                                                    // 计算动态宽度
-                                                    let width = AppUtils::calculate_dynamic_width(
-                                                        self.state.brush_width,
-                                                        self.state.dynamic_brush_mode,
-                                                        points.len() - 1,
-                                                        points.len(),
-                                                        speed,
-                                                    );
-                                                    widths.push(width);
-                                                }
-                                            }
+                                            // 计算动态宽度
+                                            let width = AppUtils::calculate_dynamic_width(
+                                                self.state.brush_width,
+                                                self.state.dynamic_brush_mode,
+                                                active_stroke.points.len() - 1,
+                                                active_stroke.points.len(),
+                                                speed,
+                                            );
+                                            active_stroke.widths.push(width);
                                         }
                                     }
                                 }
@@ -1096,75 +1179,74 @@ impl App {
                         } else if response.drag_stopped() {
                             // 结束当前笔画
                             if self.state.is_drawing {
-                                if let Some(points) = self.state.current_stroke.take() {
-                                    if let Some(widths) = self.state.current_stroke_widths.take() {
-                                        if points.len() > 1 && widths.len() == points.len() {
-                                            // 应用笔画平滑
-                                            let final_points = if self.state.stroke_smoothing {
-                                                AppUtils::apply_stroke_smoothing(&points)
-                                            } else {
-                                                points
-                                            };
+                                // 使用特殊的 touch_id 0 表示鼠标输入
+                                let touch_id = 0;
+                                if let Some(active_stroke) =
+                                    self.state.active_strokes.remove(&touch_id)
+                                {
+                                    if active_stroke.points.len() > 1
+                                        && active_stroke.widths.len() == active_stroke.points.len()
+                                    {
+                                        // 应用笔画平滑
+                                        let final_points = if self.state.stroke_smoothing {
+                                            AppUtils::apply_stroke_smoothing(&active_stroke.points)
+                                        } else {
+                                            active_stroke.points
+                                        };
 
-                                            self.state.strokes.push(crate::state::DrawingStroke {
-                                                points: final_points,
-                                                widths,
-                                                color: self.state.brush_color,
-                                                base_width: self.state.brush_width,
-                                            });
-                                        }
+                                        self.state.strokes.push(crate::state::DrawingStroke {
+                                            points: final_points,
+                                            widths: active_stroke.widths,
+                                            color: self.state.brush_color,
+                                            base_width: self.state.brush_width,
+                                        });
                                     }
                                 }
-                                self.state.current_stroke_times = None;
-                                self.state.stroke_start_time = None;
-                                self.state.is_drawing = false;
+
+                                // 检查是否还有其他正在绘制的笔画
+                                self.state.is_drawing = !self.state.active_strokes.is_empty();
                             }
                         }
 
                         // 如果鼠标在画布内移动且正在绘制，也添加点（用于平滑绘制）
                         if response.hovered() && self.state.is_drawing {
                             if let Some(pos) = pointer_pos {
-                                if let Some(ref mut points) = self.state.current_stroke {
-                                    if let Some(ref mut widths) = self.state.current_stroke_widths {
-                                        if let Some(ref mut times) = self.state.current_stroke_times
+                                // 使用特殊的 touch_id 0 表示鼠标输入
+                                let touch_id = 0;
+                                if let Some(active_stroke) =
+                                    self.state.active_strokes.get_mut(&touch_id)
+                                {
+                                    let current_time =
+                                        active_stroke.start_time.elapsed().as_secs_f64();
+
+                                    if active_stroke.points.is_empty()
+                                        || active_stroke.points.last().unwrap().distance(pos) > 1.0
+                                    {
+                                        // 计算速度
+                                        let speed = if active_stroke.points.len() > 0
+                                            && active_stroke.times.len() > 0
                                         {
-                                            if points.is_empty()
-                                                || points.last().unwrap().distance(pos) > 1.0
-                                            {
-                                                let current_time = if let Some(start) =
-                                                    self.state.stroke_start_time
-                                                {
-                                                    start.elapsed().as_secs_f64()
-                                                } else {
-                                                    0.0
-                                                };
+                                            let last_time = active_stroke.times.last().unwrap();
+                                            let time_delta =
+                                                ((current_time - last_time) as f32).max(0.001);
+                                            let distance =
+                                                active_stroke.points.last().unwrap().distance(pos);
+                                            Some(distance / time_delta)
+                                        } else {
+                                            None
+                                        };
 
-                                                // 计算速度
-                                                let speed = if points.len() > 0 && times.len() > 0 {
-                                                    let last_time = times.last().unwrap();
-                                                    let time_delta = ((current_time - last_time)
-                                                        as f32)
-                                                        .max(0.001);
-                                                    let distance =
-                                                        points.last().unwrap().distance(pos);
-                                                    Some(distance / time_delta)
-                                                } else {
-                                                    None
-                                                };
+                                        active_stroke.points.push(pos);
+                                        active_stroke.times.push(current_time);
 
-                                                points.push(pos);
-                                                times.push(current_time);
-
-                                                let width = AppUtils::calculate_dynamic_width(
-                                                    self.state.brush_width,
-                                                    self.state.dynamic_brush_mode,
-                                                    points.len() - 1,
-                                                    points.len(),
-                                                    speed,
-                                                );
-                                                widths.push(width);
-                                            }
-                                        }
+                                        let width = AppUtils::calculate_dynamic_width(
+                                            self.state.brush_width,
+                                            self.state.dynamic_brush_mode,
+                                            active_stroke.points.len() - 1,
+                                            active_stroke.points.len(),
+                                            speed,
+                                        );
+                                        active_stroke.widths.push(width);
                                     }
                                 }
                             }
@@ -1192,6 +1274,14 @@ impl App {
         // 如果启用了 FPS 显示，更新 FPS
         if self.state.show_fps {
             _ = self.state.fps_counter.update();
+        }
+
+        // 应用窗口模式更改
+        if self.state.window_mode_changed {
+            if let Some(window) = self.window.as_ref() {
+                self.apply_window_mode(window);
+                self.state.window_mode_changed = false;
+            }
         }
     }
 }
@@ -1262,12 +1352,104 @@ impl ApplicationHandler for App {
                 match phase {
                     TouchPhase::Started => {
                         self.state.touch_points.insert(id, logical_pos);
+
+                        // 如果当前工具是画笔，开始新的笔画
+                        if self.state.current_tool == Tool::Brush {
+                            self.state.is_drawing = true;
+                            let start_time = Instant::now();
+                            let width = AppUtils::calculate_dynamic_width(
+                                self.state.brush_width,
+                                self.state.dynamic_brush_mode,
+                                0,
+                                1,
+                                None,
+                            );
+
+                            self.state.active_strokes.insert(
+                                id,
+                                crate::state::ActiveStroke {
+                                    points: vec![logical_pos],
+                                    widths: vec![width],
+                                    times: vec![0.0],
+                                    start_time,
+                                },
+                            );
+                        }
                     }
                     TouchPhase::Moved => {
                         self.state.touch_points.insert(id, logical_pos);
+
+                        // 如果当前工具是画笔，继续绘制
+                        if self.state.current_tool == Tool::Brush {
+                            if let Some(active_stroke) = self.state.active_strokes.get_mut(&id) {
+                                let current_time = active_stroke.start_time.elapsed().as_secs_f64();
+
+                                // 只添加与上一个点距离足够远的点，避免点太密集
+                                if active_stroke.points.is_empty()
+                                    || active_stroke.points.last().unwrap().distance(logical_pos)
+                                        > 1.0
+                                {
+                                    // 计算速度（像素/秒）
+                                    let speed = if active_stroke.points.len() > 0
+                                        && active_stroke.times.len() > 0
+                                    {
+                                        let last_time = active_stroke.times.last().unwrap();
+                                        let time_delta =
+                                            ((current_time - last_time) as f32).max(0.001); // 避免除零
+                                        let distance = active_stroke
+                                            .points
+                                            .last()
+                                            .unwrap()
+                                            .distance(logical_pos);
+                                        Some(distance / time_delta)
+                                    } else {
+                                        None
+                                    };
+
+                                    active_stroke.points.push(logical_pos);
+                                    active_stroke.times.push(current_time);
+
+                                    // 计算动态宽度
+                                    let width = AppUtils::calculate_dynamic_width(
+                                        self.state.brush_width,
+                                        self.state.dynamic_brush_mode,
+                                        active_stroke.points.len() - 1,
+                                        active_stroke.points.len(),
+                                        speed,
+                                    );
+                                    active_stroke.widths.push(width);
+                                }
+                            }
+                        }
                     }
                     TouchPhase::Ended | TouchPhase::Cancelled => {
                         self.state.touch_points.remove(&id);
+
+                        // 如果当前工具是画笔，结束笔画
+                        if self.state.current_tool == Tool::Brush {
+                            if let Some(active_stroke) = self.state.active_strokes.remove(&id) {
+                                if active_stroke.points.len() > 1
+                                    && active_stroke.widths.len() == active_stroke.points.len()
+                                {
+                                    // 应用笔画平滑
+                                    let final_points = if self.state.stroke_smoothing {
+                                        AppUtils::apply_stroke_smoothing(&active_stroke.points)
+                                    } else {
+                                        active_stroke.points
+                                    };
+
+                                    self.state.strokes.push(crate::state::DrawingStroke {
+                                        points: final_points,
+                                        widths: active_stroke.widths,
+                                        color: self.state.brush_color,
+                                        base_width: self.state.brush_width,
+                                    });
+                                }
+                            }
+
+                            // 检查是否还有其他正在绘制的笔画
+                            self.state.is_drawing = !self.state.active_strokes.is_empty();
+                        }
                     }
                 }
 
