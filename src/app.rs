@@ -10,7 +10,7 @@ use egui_wgpu::{ScreenDescriptor, wgpu};
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::event::{KeyEvent, WindowEvent};
+use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
@@ -230,10 +230,7 @@ impl App {
                             // 显示大小预览
                             if slider_response.dragged() || slider_response.hovered() {
                                 self.state.show_size_preview = true;
-                                self.state.size_preview_size = self.state.brush_width;
                                 // 使用屏幕中心位置
-                                let content_rect = ui.ctx().available_rect();
-                                self.state.size_preview_pos = content_rect.center();
                             } else if !slider_response.dragged() && !slider_response.hovered() {
                                 self.state.show_size_preview = false;
                             }
@@ -280,10 +277,7 @@ impl App {
                             // 显示大小预览
                             if slider_response.dragged() || slider_response.hovered() {
                                 self.state.show_size_preview = true;
-                                self.state.size_preview_size = self.state.eraser_size;
                                 // 使用屏幕中心位置
-                                let content_rect = ui.ctx().available_rect();
-                                self.state.size_preview_pos = content_rect.center();
                             } else if !slider_response.dragged() && !slider_response.hovered() {
                                 self.state.show_size_preview = false;
                             }
@@ -489,14 +483,14 @@ impl App {
                     ui.separator();
 
                     ui.horizontal(|ui| {
+                        if ui.button("退出").clicked() {
+                            self.state.should_quit = true;
+                        }
                         if self.state.show_fps {
                             ui.label(format!(
                                 "FPS: {}",
                                 self.state.fps_counter.current_fps.to_string()
                             ));
-                        }
-                        if ui.button("退出").clicked() {
-                            self.state.should_quit = true;
                         }
                     });
                 });
@@ -541,26 +535,25 @@ impl App {
                 // 绘制所有文本
                 for (i, text) in self.state.texts.iter().enumerate() {
                     // Draw text using egui's text rendering
-                    painter.text(
-                        text.pos,
-                        egui::Align2::LEFT_TOP,
-                        &text.text,
+                    let text_galley = painter.layout_no_wrap(
+                        text.text.clone(),
                         egui::FontId::proportional(text.font_size),
                         text.color,
                     );
+                    let text_shape = egui::epaint::TextShape {
+                        pos: text.pos,
+                        galley: text_galley.clone(),
+                        underline: egui::Stroke::NONE,
+                        override_text_color: None,
+                        angle: 0.0,
+                        fallback_color: text.color,
+                        opacity_factor: 1.0,
+                    };
+                    painter.add(text_shape);
 
                     if let Some(SelectedObject::Text(selected_idx)) = self.state.selected_object {
                         if i == selected_idx {
-                            let text_size = painter
-                                .text(
-                                    Pos2::new(0.0, 0.0),
-                                    egui::Align2::LEFT_TOP,
-                                    &text.text,
-                                    egui::FontId::proportional(text.font_size),
-                                    text.color,
-                                )
-                                .size();
-
+                            let text_size = text_galley.size();
                             let text_rect = egui::Rect::from_min_size(text.pos, text_size);
                             painter.rect_stroke(
                                 text_rect,
@@ -648,60 +641,7 @@ impl App {
                     // 如果被选中，绘制边框
                     if let Some(SelectedObject::Shape(selected_idx)) = self.state.selected_object {
                         if i == selected_idx {
-                            let shape_rect = match shape.shape_type {
-                                ShapeType::Line => {
-                                    let end_point =
-                                        Pos2::new(shape.pos.x + shape.size, shape.pos.y);
-                                    let min_x = shape.pos.x.min(end_point.x) - 5.0;
-                                    let max_x = shape.pos.x.max(end_point.x) + 5.0;
-                                    let min_y = shape.pos.y.min(end_point.y) - 5.0;
-                                    let max_y = shape.pos.y.max(end_point.y) + 5.0;
-                                    egui::Rect::from_min_max(
-                                        Pos2::new(min_x, min_y),
-                                        Pos2::new(max_x, max_y),
-                                    )
-                                }
-                                ShapeType::Arrow => {
-                                    let end_point =
-                                        Pos2::new(shape.pos.x + shape.size, shape.pos.y);
-                                    let min_x = shape.pos.x.min(end_point.x) - 5.0;
-                                    let max_x = shape.pos.x.max(end_point.x) + 5.0;
-                                    let min_y = shape.pos.y.min(end_point.y) - 15.0;
-                                    let max_y = shape.pos.y.max(end_point.y) + 15.0;
-                                    egui::Rect::from_min_max(
-                                        Pos2::new(min_x, min_y),
-                                        Pos2::new(max_x, max_y),
-                                    )
-                                }
-                                ShapeType::Rectangle => egui::Rect::from_min_size(
-                                    shape.pos,
-                                    egui::vec2(shape.size, shape.size),
-                                ),
-                                ShapeType::Triangle => {
-                                    let half_size = shape.size / 2.0;
-                                    let min_x = shape.pos.x - 5.0;
-                                    let max_x = shape.pos.x + shape.size + 5.0;
-                                    let min_y = shape.pos.y - 5.0;
-                                    let max_y = shape.pos.y + half_size + 5.0;
-                                    egui::Rect::from_min_max(
-                                        Pos2::new(min_x, min_y),
-                                        Pos2::new(max_x, max_y),
-                                    )
-                                }
-                                ShapeType::Circle => {
-                                    let radius = shape.size / 2.0;
-                                    egui::Rect::from_min_max(
-                                        Pos2::new(
-                                            shape.pos.x - radius - 5.0,
-                                            shape.pos.y - radius - 5.0,
-                                        ),
-                                        Pos2::new(
-                                            shape.pos.x + radius + 5.0,
-                                            shape.pos.y + radius + 5.0,
-                                        ),
-                                    )
-                                }
-                            };
+                            let shape_rect = AppUtils::calculate_shape_bounding_box(shape);
 
                             painter.rect_stroke(
                                 shape_rect,
@@ -797,27 +737,42 @@ impl App {
 
                 // 绘制大小预览圆圈
                 if self.state.show_size_preview {
-                    const PREVIEW_BORDER_WIDTH: f32 = 2.0;
+                    let content_rect = ui.ctx().available_rect();
+                    let pos = content_rect.center();
+                    AppUtils::draw_size_preview(painter, pos, self.state.brush_width);
+                }
 
-                    let preview_pos = self.state.size_preview_pos;
-                    let preview_size = self.state.size_preview_size;
-                    let radius = preview_size / PREVIEW_BORDER_WIDTH;
+                // 绘制多点触控点
+                for (id, pos) in &self.state.touch_points {
+                    // 绘制触控点
+                    painter.circle_filled(*pos, 15.0, Color32::from_rgba_unmultiplied(255, 255, 255, 180));
+                    painter.circle_stroke(*pos, 15.0, Stroke::new(2.0, Color32::BLUE));
 
-                    // 绘制白色填充的圆
-                    painter.circle_filled(preview_pos, radius, Color32::WHITE);
-
-                    // 绘制黑色边框
-                    painter.circle_stroke(
-                        preview_pos,
-                        radius,
-                        Stroke::new(PREVIEW_BORDER_WIDTH, Color32::BLACK),
+                    // 绘制触控ID
+                    let text_galley = painter.layout_no_wrap(
+                        format!("{}", id),
+                        egui::FontId::proportional(14.0),
+                        Color32::BLACK,
                     );
+                    let text_pos = Pos2::new(pos.x - text_galley.size().x / 2.0, pos.y - text_galley.size().y / 2.0);
+                    let text_shape = egui::epaint::TextShape {
+                        pos: text_pos,
+                        galley: text_galley,
+                        underline: egui::Stroke::NONE,
+                        override_text_color: None,
+                        angle: 0.0,
+                        fallback_color: Color32::BLACK,
+                        opacity_factor: 1.0,
+                    };
+                    painter.add(text_shape);
                 }
 
                 // 处理鼠标输入
                 let pointer_pos = response.interact_pointer_pos();
 
                 match self.state.current_tool {
+                    Tool::Insert | Tool::Background | Tool::Settings => {}
+
                     Tool::Select => {
                         if response.drag_started() {
                             if let Some(pos) = pointer_pos {
@@ -836,16 +791,13 @@ impl App {
 
                                 // 检查文本
                                 for (i, text) in self.state.texts.iter().enumerate().rev() {
-                                    // 使用 painter 来计算文本大小
-                                    let text_size = painter
-                                        .text(
-                                            Pos2::new(0.0, 0.0),
-                                            egui::Align2::LEFT_TOP,
-                                            &text.text,
-                                            egui::FontId::proportional(text.font_size),
-                                            text.color,
-                                        )
-                                        .size();
+                                    // 使用 layout_no_wrap 来计算文本大小（不渲染）
+                                    let text_galley = painter.layout_no_wrap(
+                                        text.text.clone(),
+                                        egui::FontId::proportional(text.font_size),
+                                        text.color,
+                                    );
+                                    let text_size = text_galley.size();
 
                                     let text_rect = egui::Rect::from_min_size(text.pos, text_size);
                                     if text_rect.contains(pos) {
@@ -858,64 +810,8 @@ impl App {
                                 // 检查形状
                                 if self.state.selected_object.is_none() {
                                     for (i, shape) in self.state.shapes.iter().enumerate().rev() {
-                                        let shape_rect = match shape.shape_type {
-                                            ShapeType::Line => {
-                                                let end_point = Pos2::new(
-                                                    shape.pos.x + shape.size,
-                                                    shape.pos.y,
-                                                );
-                                                let min_x = shape.pos.x.min(end_point.x) - 5.0;
-                                                let max_x = shape.pos.x.max(end_point.x) + 5.0;
-                                                let min_y = shape.pos.y.min(end_point.y) - 5.0;
-                                                let max_y = shape.pos.y.max(end_point.y) + 5.0;
-                                                egui::Rect::from_min_max(
-                                                    Pos2::new(min_x, min_y),
-                                                    Pos2::new(max_x, max_y),
-                                                )
-                                            }
-                                            ShapeType::Arrow => {
-                                                let end_point = Pos2::new(
-                                                    shape.pos.x + shape.size,
-                                                    shape.pos.y,
-                                                );
-                                                let min_x = shape.pos.x.min(end_point.x) - 5.0;
-                                                let max_x = shape.pos.x.max(end_point.x) + 5.0;
-                                                let min_y = shape.pos.y.min(end_point.y) - 15.0;
-                                                let max_y = shape.pos.y.max(end_point.y) + 15.0;
-                                                egui::Rect::from_min_max(
-                                                    Pos2::new(min_x, min_y),
-                                                    Pos2::new(max_x, max_y),
-                                                )
-                                            }
-                                            ShapeType::Rectangle => egui::Rect::from_min_size(
-                                                shape.pos,
-                                                egui::vec2(shape.size, shape.size),
-                                            ),
-                                            ShapeType::Triangle => {
-                                                let half_size = shape.size / 2.0;
-                                                let min_x = shape.pos.x - 5.0;
-                                                let max_x = shape.pos.x + shape.size + 5.0;
-                                                let min_y = shape.pos.y - 5.0;
-                                                let max_y = shape.pos.y + half_size + 5.0;
-                                                egui::Rect::from_min_max(
-                                                    Pos2::new(min_x, min_y),
-                                                    Pos2::new(max_x, max_y),
-                                                )
-                                            }
-                                            ShapeType::Circle => {
-                                                let radius = shape.size / 2.0;
-                                                egui::Rect::from_min_max(
-                                                    Pos2::new(
-                                                        shape.pos.x - radius - 5.0,
-                                                        shape.pos.y - radius - 5.0,
-                                                    ),
-                                                    Pos2::new(
-                                                        shape.pos.x + radius + 5.0,
-                                                        shape.pos.y + radius + 5.0,
-                                                    ),
-                                                )
-                                            }
-                                        };
+                                        let shape_rect =
+                                            AppUtils::calculate_shape_bounding_box(shape);
 
                                         if shape_rect.contains(pos) {
                                             self.state.selected_object =
@@ -994,14 +890,13 @@ impl App {
                         }
                     }
 
-                    Tool::Insert | Tool::Background => {
-                        // 插入工具和背景工具通过 UI 按钮触发，这里不处理画布交互
-                    }
-
                     Tool::ObjectEraser => {
                         // 对象橡皮擦：点击或拖拽时删除相交的整个对象
                         if response.drag_started() || response.clicked() || response.dragged() {
                             if let Some(pos) = pointer_pos {
+                                // 绘制指针
+                                AppUtils::draw_size_preview(painter, pos, self.state.eraser_size);
+
                                 // 从后往前删除，避免索引问题
 
                                 // 标记图片为删除（延迟删除以避免Vulkan资源冲突）
@@ -1015,15 +910,13 @@ impl App {
                                 // 删除文本
                                 let mut to_remove_texts = Vec::new();
                                 for (i, text) in self.state.texts.iter().enumerate().rev() {
-                                    let text_size = painter
-                                        .text(
-                                            Pos2::new(0.0, 0.0),
-                                            egui::Align2::LEFT_TOP,
-                                            &text.text,
-                                            egui::FontId::proportional(text.font_size),
-                                            text.color,
-                                        )
-                                        .size();
+                                    // 使用 layout_no_wrap 来计算文本大小（不渲染）
+                                    let text_galley = painter.layout_no_wrap(
+                                        text.text.clone(),
+                                        egui::FontId::proportional(text.font_size),
+                                        text.color,
+                                    );
+                                    let text_size = text_galley.size();
                                     let text_rect = egui::Rect::from_min_size(text.pos, text_size);
                                     if text_rect.contains(pos) {
                                         to_remove_texts.push(i);
@@ -1036,60 +929,7 @@ impl App {
                                 // 删除形状
                                 let mut to_remove_shapes = Vec::new();
                                 for (i, shape) in self.state.shapes.iter().enumerate().rev() {
-                                    let shape_rect = match shape.shape_type {
-                                        ShapeType::Line => {
-                                            let end_point =
-                                                Pos2::new(shape.pos.x + shape.size, shape.pos.y);
-                                            let min_x = shape.pos.x.min(end_point.x) - 5.0;
-                                            let max_x = shape.pos.x.max(end_point.x) + 5.0;
-                                            let min_y = shape.pos.y.min(end_point.y) - 5.0;
-                                            let max_y = shape.pos.y.max(end_point.y) + 5.0;
-                                            egui::Rect::from_min_max(
-                                                Pos2::new(min_x, min_y),
-                                                Pos2::new(max_x, max_y),
-                                            )
-                                        }
-                                        ShapeType::Arrow => {
-                                            let end_point =
-                                                Pos2::new(shape.pos.x + shape.size, shape.pos.y);
-                                            let min_x = shape.pos.x.min(end_point.x) - 5.0;
-                                            let max_x = shape.pos.x.max(end_point.x) + 5.0;
-                                            let min_y = shape.pos.y.min(end_point.y) - 15.0;
-                                            let max_y = shape.pos.y.max(end_point.y) + 15.0;
-                                            egui::Rect::from_min_max(
-                                                Pos2::new(min_x, min_y),
-                                                Pos2::new(max_x, max_y),
-                                            )
-                                        }
-                                        ShapeType::Rectangle => egui::Rect::from_min_size(
-                                            shape.pos,
-                                            egui::vec2(shape.size, shape.size),
-                                        ),
-                                        ShapeType::Triangle => {
-                                            let half_size = shape.size / 2.0;
-                                            let min_x = shape.pos.x - 5.0;
-                                            let max_x = shape.pos.x + shape.size + 5.0;
-                                            let min_y = shape.pos.y - 5.0;
-                                            let max_y = shape.pos.y + half_size + 5.0;
-                                            egui::Rect::from_min_max(
-                                                Pos2::new(min_x, min_y),
-                                                Pos2::new(max_x, max_y),
-                                            )
-                                        }
-                                        ShapeType::Circle => {
-                                            let radius = shape.size / 2.0;
-                                            egui::Rect::from_min_max(
-                                                Pos2::new(
-                                                    shape.pos.x - radius - 5.0,
-                                                    shape.pos.y - radius - 5.0,
-                                                ),
-                                                Pos2::new(
-                                                    shape.pos.x + radius + 5.0,
-                                                    shape.pos.y + radius + 5.0,
-                                                ),
-                                            )
-                                        }
-                                    };
+                                    let shape_rect = AppUtils::calculate_shape_bounding_box(shape);
 
                                     if shape_rect.contains(pos) {
                                         to_remove_shapes.push(i);
@@ -1127,6 +967,13 @@ impl App {
                         } else if response.dragged() {
                             if self.state.is_drawing {
                                 if let Some(pos) = pointer_pos {
+                                    // 绘制指针
+                                    AppUtils::draw_size_preview(
+                                        painter,
+                                        pos,
+                                        self.state.eraser_size,
+                                    );
+
                                     if let Some(ref mut points) = self.state.current_stroke {
                                         if points.is_empty()
                                             || points.last().unwrap().distance(pos) > 1.0
@@ -1165,12 +1012,8 @@ impl App {
                         }
                     }
 
-                    Tool::Settings => {
-                        // 设置工具：不处理画布交互，通过UI控制
-                    }
-
                     Tool::Brush => {
-                        // 画笔工具：原有逻辑
+                        // 画笔工具
                         if response.drag_started() {
                             // 开始新的笔画
                             if let Some(pos) = pointer_pos {
@@ -1346,7 +1189,7 @@ impl App {
         // 清理已标记为删除的图片（在帧结束时安全删除）
         self.state.images.retain(|img| !img.marked_for_deletion);
 
-        // 如果启用了FPS显示，更新FPS
+        // 如果启用了 FPS 显示，更新 FPS
         if self.state.show_fps {
             _ = self.state.fps_counter.update();
         }
@@ -1369,7 +1212,7 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // let egui render to process the event first
+        // 让 egui 先处理事件
         self.render_state
             .as_mut()
             .unwrap()
@@ -1400,6 +1243,36 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(new_size) => {
                 self.handle_resized(new_size.width, new_size.height);
+            }
+            WindowEvent::Touch(Touch {
+                phase,
+                location,
+                id,
+                ..
+            }) => {
+                // Convert touch location to logical coordinates
+                let window = self.window.as_ref().unwrap();
+                let scale_factor = window.scale_factor() as f32;
+                let logical_pos = Pos2::new(
+                    location.x as f32 / scale_factor,
+                    location.y as f32 / scale_factor,
+                );
+
+                // Store touch point in state for rendering
+                match phase {
+                    TouchPhase::Started => {
+                        self.state.touch_points.insert(id, logical_pos);
+                    }
+                    TouchPhase::Moved => {
+                        self.state.touch_points.insert(id, logical_pos);
+                    }
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        self.state.touch_points.remove(&id);
+                    }
+                }
+
+                // Request redraw to update touch visualization
+                self.window.as_ref().unwrap().request_redraw();
             }
             _ => (),
         }
