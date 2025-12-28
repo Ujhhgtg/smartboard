@@ -1,11 +1,10 @@
-use egui::{Context, FontData, FontDefinitions, FontFamily};
+use egui::{Context, FontDefinitions};
 use egui_wgpu::wgpu::{CommandEncoder, Device, Queue, StoreOp, TextureFormat, TextureView};
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor, wgpu};
 use egui_winit::State;
+use std::sync::Arc;
 use winit::event::WindowEvent;
 use winit::window::Window;
-use std::fs;
-use std::sync::Arc;
 
 pub struct EguiRenderer {
     state: State,
@@ -26,9 +25,9 @@ impl EguiRenderer {
         window: &Window,
     ) -> EguiRenderer {
         let mut egui_context = Context::default();
-        
-        // 配置支持 CJK 的字体
-        Self::setup_cjk_fonts(&mut egui_context);
+
+        // 配置字体
+        Self::setup_fonts(&mut egui_context);
 
         let egui_state = egui_winit::State::new(
             egui_context,
@@ -56,105 +55,34 @@ impl EguiRenderer {
         }
     }
 
-    fn setup_cjk_fonts(ctx: &mut Context) {
+    fn setup_fonts(ctx: &mut Context) {
         let mut fonts = FontDefinitions::default();
-        
-        // 尝试加载系统 CJK 字体
-        let cjk_font_paths = [
-            // Windows 常见 CJK 字体路径
-            "C:\\Windows\\Fonts\\msyh.ttc",           // 微软雅黑
-            "C:\\Windows\\Fonts\\simhei.ttf",         // 黑体
-            "C:\\Windows\\Fonts\\simsun.ttc",         // 宋体
-            "C:\\Windows\\Fonts\\msyhbd.ttc",         // 微软雅黑 Bold
-            // Linux 常见路径
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            // macOS 常见路径
-            "/System/Library/Fonts/PingFang.ttc",
-            "/System/Library/Fonts/STHeiti Light.ttc",
-        ];
 
-        let mut cjk_font_loaded = false;
-        
-        for font_path in &cjk_font_paths {
-            if let Ok(font_data) = fs::read(font_path) {
-                fonts.font_data.insert(
-                    "cjk_font".to_owned(),
-                    Arc::new(FontData::from_owned(font_data)),
-                );
-                
-                // 将 CJK 字体添加到比例字体族的最前面
-                fonts
-                    .families
-                    .get_mut(&FontFamily::Proportional)
-                    .unwrap()
-                    .insert(0, "cjk_font".to_owned());
-                
-                // 也添加到等宽字体族
-                fonts
-                    .families
-                    .get_mut(&FontFamily::Monospace)
-                    .unwrap()
-                    .insert(0, "cjk_font".to_owned());
-                
-                cjk_font_loaded = true;
-                break;
-            }
-        }
+        fonts.font_data.insert(
+            "notosans_cjk_sc".to_owned(),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/fonts/NotoSans-CJK-SC/NotoSansCJKsc-Regular.otf"
+            ))),
+        );
 
-        // 如果系统字体加载失败，尝试使用 fontdb 查找
-        if !cjk_font_loaded {
-            let mut font_db = fontdb::Database::new();
-            font_db.load_system_fonts();
-            
-            // 查找支持 CJK 的字体
-            let cjk_font_names = [
-                "Microsoft YaHei",
-                "微软雅黑",
-                "SimHei",
-                "黑体",
-                "SimSun",
-                "宋体",
-                "PingFang SC",
-                "Noto Sans CJK",
-                "Source Han Sans",
-            ];
-            
-            for font_name in &cjk_font_names {
-                if let Some(face_id) = font_db.query(&fontdb::Query {
-                    families: &[fontdb::Family::Name(font_name)],
-                    weight: fontdb::Weight::NORMAL,
-                    stretch: fontdb::Stretch::Normal,
-                    style: fontdb::Style::Normal,
-                }) {
-                    if let Some(font_data) = font_db.with_face_data(face_id, |data, _| {
-                        Some(data.to_vec())
-                    }) {
-                        if let Some(font_bytes) = font_data {
-                            fonts.font_data.insert(
-                                "cjk_font".to_owned(),
-                                Arc::new(FontData::from_owned(font_bytes)),
-                            );
-                            
-                            fonts
-                                .families
-                                .get_mut(&FontFamily::Proportional)
-                                .unwrap()
-                                .insert(0, "cjk_font".to_owned());
-                            
-                            fonts
-                                .families
-                                .get_mut(&FontFamily::Monospace)
-                                .unwrap()
-                                .insert(0, "cjk_font".to_owned());
-                            
-                            cjk_font_loaded = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        // fonts.font_data.insert(
+        //     "notocoloremoji".to_owned(),
+        //     Arc::new(egui::FontData::from_static(include_bytes!(
+        //         "../assets/fonts/NotoColorEmoji/NotoColorEmoji.ttf"
+        //     ))),
+        // );
+
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "notosans_cjk_sc".to_owned());
+
+        // fonts
+        //     .families
+        //     .entry(egui::FontFamily::Proportional)
+        //     .or_default()
+        //     .insert(0, "notocoloremoji".to_owned());
 
         ctx.set_fonts(fonts);
     }

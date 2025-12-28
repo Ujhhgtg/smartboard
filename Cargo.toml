@@ -5,8 +5,10 @@ edition = "2024"
 
 [dependencies]
 egui = "0.33.3"
-egui-wgpu = { version = "0.33.3", features = ["winit"] }
+egui-wgpu = { version = "0.33.3", features = ["winit", "wayland"] }
 egui-winit = "0.33.3"
+wgpu = { version = "27.0.1", features = ["webgpu", "webgl"] }
 winit = "0.30.12"
 pollster = "0.4.0"
-fontdb = "0.23.0"
+rfd = "0.16.0"
+image = "0.25.9"
