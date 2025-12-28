@@ -1,12 +1,13 @@
 use crate::egui_tools::EguiRenderer;
-use egui_wgpu::wgpu::SurfaceError;
-use egui_wgpu::{wgpu, ScreenDescriptor};
+use egui_wgpu::wgpu::{ExperimentalFeatures, SurfaceError};
+use egui_wgpu::{ScreenDescriptor, wgpu};
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
+use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Window, WindowId};
+use winit::keyboard::{Key, NamedKey};
+use winit::window::{Fullscreen, Window, WindowId};
+use egui::{Color32, Pos2, Shape, Stroke};
 
 pub struct AppState {
     pub device: wgpu::Device,
@@ -15,6 +16,22 @@ pub struct AppState {
     pub surface: wgpu::Surface<'static>,
     pub scale_factor: f32,
     pub egui_renderer: EguiRenderer,
+}
+
+// 绘图数据结构
+#[derive(Clone)]
+pub struct DrawingStroke {
+    pub points: Vec<Pos2>,
+    pub color: Color32,
+    pub width: f32,
+}
+
+pub struct DrawingState {
+    pub strokes: Vec<DrawingStroke>,
+    pub current_stroke: Option<Vec<Pos2>>,
+    pub is_drawing: bool,
+    pub brush_color: Color32,
+    pub brush_width: f32,
 }
 
 impl AppState {
@@ -37,15 +54,14 @@ impl AppState {
 
         let features = wgpu::Features::empty();
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: features,
-                    required_limits: Default::default(),
-                    memory_hints: Default::default(),
-                    trace: Default::default()
-                }
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: features,
+                required_limits: Default::default(),
+                memory_hints: Default::default(),
+                trace: Default::default(),
+                experimental_features: ExperimentalFeatures::default(),
+            })
             .await
             .expect("Failed to create device");
 
@@ -95,6 +111,7 @@ pub struct App {
     instance: wgpu::Instance,
     state: Option<AppState>,
     window: Option<Arc<Window>>,
+    drawing_state: DrawingState,
 }
 
 impl App {
@@ -104,15 +121,27 @@ impl App {
             instance,
             state: None,
             window: None,
+            drawing_state: DrawingState {
+                strokes: Vec::new(),
+                current_stroke: None,
+                is_drawing: false,
+                brush_color: Color32::BLACK,
+                brush_width: 2.0,
+            },
         }
     }
 
     async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
-        let initial_width = 1360;
-        let initial_height = 768;
-
-        let _ = window.request_inner_size(PhysicalSize::new(initial_width, initial_height));
+        
+        // 设置全屏模式
+        let monitor = window.current_monitor();
+        window.set_fullscreen(Some(Fullscreen::Borderless(monitor)));
+        
+        // 获取全屏后的实际尺寸
+        let size = window.inner_size();
+        let initial_width = size.width;
+        let initial_height = size.height;
 
         let surface = self
             .instance
@@ -124,7 +153,7 @@ impl App {
             surface,
             &window,
             initial_width,
-            initial_width,
+            initial_height,
         )
         .await;
 
@@ -186,32 +215,157 @@ impl App {
 
         {
             state.egui_renderer.begin_frame(window);
+            let ctx = state.egui_renderer.context();
 
-            egui::Window::new("winit + egui + wgpu says hello!")
-                .resizable(true)
-                .vscroll(true)
-                .default_open(false)
-                .show(state.egui_renderer.context(), |ui| {
-                    ui.label("Label!");
-
-                    if ui.button("Button!").clicked() {
-                        println!("boom!")
-                    }
-
-                    ui.separator();
+            // 工具栏窗口 - 使用 pivot 锚定在底部中央，使用实际窗口大小
+            let content_rect = ctx.available_rect();
+            let margin = 20.0; // 底部边距
+            
+            egui::Window::new("工具栏")
+                .resizable(false)
+                .pivot(egui::Align2::CENTER_BOTTOM)
+                .default_pos([content_rect.center().x, content_rect.max.y - margin])
+                .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(format!(
-                            "Pixels per point: {}",
-                            state.egui_renderer.context().pixels_per_point()
-                        ));
-                        if ui.button("-").clicked() {
-                            state.scale_factor = (state.scale_factor - 0.1).max(0.3);
-                        }
-                        if ui.button("+").clicked() {
-                            state.scale_factor = (state.scale_factor + 0.1).min(3.0);
+                        ui.label("颜色:");
+                        let old_color = self.drawing_state.brush_color;
+                        if ui.color_edit_button_srgba(&mut self.drawing_state.brush_color).changed() {
+                            // 颜色改变时，如果正在绘制，结束当前笔画（使用旧颜色）
+                            if self.drawing_state.is_drawing {
+                                if let Some(points) = self.drawing_state.current_stroke.take() {
+                                    if points.len() > 1 {
+                                        self.drawing_state.strokes.push(DrawingStroke {
+                                            points,
+                                            color: old_color,
+                                            width: self.drawing_state.brush_width,
+                                        });
+                                    }
+                                }
+                                self.drawing_state.is_drawing = false;
+                            }
                         }
                     });
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("画笔宽度:");
+                        ui.add(egui::Slider::new(&mut self.drawing_state.brush_width, 1.0..=20.0));
+                    });
+
+                    ui.separator();
+
+                    if ui.button("清除画布").clicked() {
+                        self.drawing_state.strokes.clear();
+                        self.drawing_state.current_stroke = None;
+                        self.drawing_state.is_drawing = false;
+                    }
                 });
+
+            // 主画布区域
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let (rect, response) = ui.allocate_exact_size(
+                    ui.available_size(),
+                    egui::Sense::click_and_drag(),
+                );
+
+                let painter = ui.painter();
+                
+                // 绘制背景
+                painter.rect_filled(rect, 0.0, Color32::WHITE);
+
+                // 绘制所有已完成的笔画 - 使用路径避免黑色边框
+                for stroke in &self.drawing_state.strokes {
+                    if stroke.points.len() < 2 {
+                        continue;
+                    }
+                    if stroke.points.len() == 2 {
+                        // 只有两个点，直接画线段
+                        painter.line_segment(
+                            [stroke.points[0], stroke.points[1]],
+                            Stroke::new(stroke.width, stroke.color),
+                        );
+                    } else {
+                        // 多个点，使用路径绘制平滑曲线
+                        let path = egui::epaint::PathShape::line(stroke.points.clone(), Stroke::new(stroke.width, stroke.color));
+                        painter.add(Shape::Path(path));
+                    }
+                }
+
+                // 绘制当前正在绘制的笔画 - 使用路径避免黑色边框
+                if let Some(ref points) = self.drawing_state.current_stroke {
+                    if points.len() >= 2 {
+                        if points.len() == 2 {
+                            // 只有两个点，直接画线段
+                            painter.line_segment(
+                                [points[0], points[1]],
+                                Stroke::new(
+                                    self.drawing_state.brush_width,
+                                    self.drawing_state.brush_color,
+                                ),
+                            );
+                        } else {
+                            // 多个点，使用路径绘制平滑曲线
+                            let path = egui::epaint::PathShape::line(points.clone(), Stroke::new(
+                                self.drawing_state.brush_width,
+                                self.drawing_state.brush_color,
+                            ));
+                            painter.add(Shape::Path(path));
+                        }
+                    }
+                }
+
+                // 处理鼠标输入
+                let pointer_pos = response.interact_pointer_pos();
+                
+                if response.drag_started() {
+                    // 开始新的笔画
+                    if let Some(pos) = pointer_pos {
+                        if pos.x >= rect.min.x && pos.x <= rect.max.x 
+                            && pos.y >= rect.min.y && pos.y <= rect.max.y {
+                            self.drawing_state.is_drawing = true;
+                            self.drawing_state.current_stroke = Some(vec![pos]);
+                        }
+                    }
+                } else if response.dragged() {
+                    // 继续绘制
+                    if self.drawing_state.is_drawing {
+                        if let Some(pos) = pointer_pos {
+                            if let Some(ref mut points) = self.drawing_state.current_stroke {
+                                // 只添加与上一个点距离足够远的点，避免点太密集
+                                if points.is_empty() || 
+                                    points.last().unwrap().distance(pos) > 1.0 {
+                                    points.push(pos);
+                                }
+                            }
+                        }
+                    }
+                } else if response.drag_stopped() {
+                    // 结束当前笔画
+                    if self.drawing_state.is_drawing {
+                        if let Some(points) = self.drawing_state.current_stroke.take() {
+                            if points.len() > 1 {
+                                self.drawing_state.strokes.push(DrawingStroke {
+                                    points,
+                                    color: self.drawing_state.brush_color,
+                                    width: self.drawing_state.brush_width,
+                                });
+                            }
+                        }
+                        self.drawing_state.is_drawing = false;
+                    }
+                }
+
+                // 如果鼠标在画布内移动且正在绘制，也添加点（用于平滑绘制）
+                if response.hovered() && self.drawing_state.is_drawing {
+                    if let Some(pos) = pointer_pos {
+                        if let Some(ref mut points) = self.drawing_state.current_stroke {
+                            if points.is_empty() || 
+                                points.last().unwrap().distance(pos) > 1.0 {
+                                points.push(pos);
+                            }
+                        }
+                    }
+                }
+            });
 
             state.egui_renderer.end_frame_and_draw(
                 &state.device,
@@ -247,6 +401,18 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => {
                 println!("The close button was pressed; stopping");
+                event_loop.exit();
+            }
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        logical_key: Key::Named(NamedKey::Escape),
+                        state: winit::event::ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => {
+                println!("Escape key pressed; exiting");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {

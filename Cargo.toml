@@ -1,11 +1,12 @@
 [package]
-name = "egui-rust-wgpu-hello"
-version = "1.0.0"
-edition = "2021"
+name = "smartboard"
+version = "0.0.1"
+edition = "2024"
 
 [dependencies]
-egui = "0.32.1"
-egui-wgpu = { version = "0.32.1", features = ["winit"] }
-egui-winit = "0.32.1"
+egui = "0.33.3"
+egui-wgpu = { version = "0.33.3", features = ["winit"] }
+egui-winit = "0.33.3"
 winit = "0.30.12"
 pollster = "0.4.0"
+fontdb = "0.23.0"
