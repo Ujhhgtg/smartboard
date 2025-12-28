@@ -4,6 +4,14 @@ mod egui_tools;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        tinyfiledialogs::message_box_ok(
+            "Application Panic",
+            &info.to_string(),
+            tinyfiledialogs::MessageBoxIcon::Error,
+        );
+    }));
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         pollster::block_on(run());

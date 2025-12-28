@@ -2,6 +2,7 @@ use crate::egui_tools::EguiRenderer;
 use egui::{Color32, Pos2, Shape, Stroke};
 use egui_wgpu::wgpu::{ExperimentalFeatures, SurfaceError};
 use egui_wgpu::{ScreenDescriptor, wgpu};
+use std::fmt::format;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -10,7 +11,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
-pub struct AppState {
+pub struct RenderState {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub surface_config: wgpu::SurfaceConfiguration,
@@ -36,6 +37,7 @@ pub enum Tool {
     PixelEraser,  // 像素橡皮擦
     Insert,       // 插入
     Background,   // 背景
+    Settings,     // 设置
 }
 
 // 插入的图片数据结构
@@ -44,6 +46,7 @@ pub struct InsertedImage {
     pub pos: Pos2,
     pub size: egui::Vec2,
     pub aspect_ratio: f32,
+    pub marked_for_deletion: bool, // deferred deletion to avoid panic
 }
 
 // 插入的文本数据结构
@@ -54,12 +57,31 @@ pub struct InsertedText {
     pub font_size: f32,
 }
 
+// 插入的形状数据结构
+#[derive(Clone, Copy, Debug)]
+pub enum ShapeType {
+    Line,
+    Arrow,
+    Rectangle,
+    Triangle,
+    Circle,
+}
+
+pub struct InsertedShape {
+    pub shape_type: ShapeType,
+    pub pos: Pos2,
+    pub size: f32,
+    pub color: Color32,
+    pub rotation: f32,
+}
+
 // 被选择的对象
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SelectedObject {
     Stroke(usize),
     Image(usize),
     Text(usize),
+    Shape(usize),
 }
 
 // 绘图数据结构
@@ -71,10 +93,43 @@ pub struct DrawingStroke {
     pub base_width: f32,
 }
 
-pub struct DrawingState {
+// FPS 计数器
+pub struct FpsCounter {
+    pub frame_count: u32,
+    pub last_time: Instant,
+    pub current_fps: f32,
+}
+
+impl FpsCounter {
+    pub fn new() -> Self {
+        Self {
+            frame_count: 0,
+            last_time: Instant::now(),
+            current_fps: 0.0,
+        }
+    }
+
+    pub fn update(&mut self) -> f32 {
+        self.frame_count += 1;
+
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_time).as_secs_f32();
+
+        if elapsed >= 0.5 {
+            self.current_fps = self.frame_count as f32 / elapsed;
+            self.frame_count = 0;
+            self.last_time = now;
+        }
+
+        self.current_fps
+    }
+}
+
+pub struct AppState {
     pub strokes: Vec<DrawingStroke>,
     pub images: Vec<InsertedImage>,
     pub texts: Vec<InsertedText>,
+    pub shapes: Vec<InsertedShape>,
     pub current_stroke: Option<Vec<Pos2>>,
     pub current_stroke_widths: Option<Vec<f32>>, // 当前笔画的宽度
     pub current_stroke_times: Option<Vec<f64>>,  // 每个点的时间戳（用于速度计算）
@@ -92,9 +147,15 @@ pub struct DrawingState {
     pub show_size_preview: bool,
     pub size_preview_pos: Pos2,
     pub size_preview_size: f32,
+    pub show_text_dialog: bool,
+    pub new_text_content: String,
+    pub show_shape_dialog: bool,
+    pub show_fps: bool,          // 是否显示FPS
+    pub fps_counter: FpsCounter, // FPS计数器
+    pub should_quit: bool,
 }
 
-impl AppState {
+impl RenderState {
     async fn new(
         instance: &wgpu::Instance,
         surface: wgpu::Surface<'static>,
@@ -169,12 +230,9 @@ impl AppState {
 
 pub struct App {
     instance: wgpu::Instance,
-    state: Option<AppState>,
+    render_state: Option<RenderState>,
     window: Option<Arc<Window>>,
-    drawing_state: DrawingState,
-    should_quit: bool,
-    show_text_dialog: bool,
-    new_text_content: String,
+    state: AppState,
 }
 
 impl App {
@@ -326,12 +384,13 @@ impl App {
         let instance = egui_wgpu::wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         Self {
             instance,
-            state: None,
+            render_state: None,
             window: None,
-            drawing_state: DrawingState {
+            state: AppState {
                 strokes: Vec::new(),
                 images: Vec::new(),
                 texts: Vec::new(),
+                shapes: Vec::new(),
                 current_stroke: None,
                 current_stroke_widths: None,
                 current_stroke_times: None,
@@ -349,15 +408,21 @@ impl App {
                 show_size_preview: false,
                 size_preview_pos: Pos2::new(50.0, 50.0),
                 size_preview_size: 5.0,
+                show_fps: false,
+                fps_counter: FpsCounter::new(),
+                should_quit: false,
+                show_text_dialog: false,
+                new_text_content: String::from(""),
+                show_shape_dialog: false,
             },
-            should_quit: false,
-            show_text_dialog: false,
-            new_text_content: String::from(""),
         }
     }
 
     async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
+
+        // 设置标题
+        window.set_title("smartboard");
 
         // 设置全屏模式
         let monitor = window.current_monitor();
@@ -373,7 +438,7 @@ impl App {
             .create_surface(window.clone())
             .expect("Failed to create surface!");
 
-        let state = AppState::new(
+        let state = RenderState::new(
             &self.instance,
             surface,
             &window,
@@ -383,17 +448,19 @@ impl App {
         .await;
 
         self.window.get_or_insert(window);
-        self.state.get_or_insert(state);
+        self.render_state.get_or_insert(state);
     }
 
     fn handle_resized(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
-            self.state.as_mut().unwrap().resize_surface(width, height);
+            self.render_state
+                .as_mut()
+                .unwrap()
+                .resize_surface(width, height);
         }
     }
 
     fn handle_redraw(&mut self) {
-        // Attempt to handle minimizing window
         if let Some(window) = self.window.as_ref() {
             if let Some(min) = window.is_minimized() {
                 if min {
@@ -403,7 +470,7 @@ impl App {
             }
         }
 
-        let state = self.state.as_mut().unwrap();
+        let state = self.render_state.as_mut().unwrap();
 
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [state.surface_config.width, state.surface_config.height],
@@ -442,7 +509,7 @@ impl App {
             state.egui_renderer.begin_frame(window);
             let ctx = state.egui_renderer.context();
 
-            // 工具栏窗口 - 使用 pivot 锚定在底部中央，使用实际窗口大小
+            // 工具栏窗口
             let content_rect = ctx.available_rect();
             let margin = 20.0; // 底部边距
 
@@ -455,107 +522,114 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label("工具:");
                         // TODO: egui doesn't support rendering fonts with colors
-                        let old_tool = self.drawing_state.current_tool;
+                        let old_tool = self.state.current_tool;
                         if ui
-                            .selectable_value(
-                                &mut self.drawing_state.current_tool,
-                                Tool::Select,
-                                "选择",
-                            )
+                            .selectable_value(&mut self.state.current_tool, Tool::Select, "选择")
                             .changed()
                             || ui
-                                .selectable_value(
-                                    &mut self.drawing_state.current_tool,
-                                    Tool::Brush,
-                                    "画笔",
-                                )
+                                .selectable_value(&mut self.state.current_tool, Tool::Brush, "画笔")
                                 .changed()
                             || ui
                                 .selectable_value(
-                                    &mut self.drawing_state.current_tool,
+                                    &mut self.state.current_tool,
                                     Tool::ObjectEraser,
                                     "对象橡皮擦",
                                 )
                                 .changed()
                             || ui
                                 .selectable_value(
-                                    &mut self.drawing_state.current_tool,
+                                    &mut self.state.current_tool,
                                     Tool::PixelEraser,
                                     "像素橡皮擦",
                                 )
                                 .changed()
                             || ui
                                 .selectable_value(
-                                    &mut self.drawing_state.current_tool,
+                                    &mut self.state.current_tool,
                                     Tool::Insert,
                                     "插入",
                                 )
                                 .changed()
                             || ui
                                 .selectable_value(
-                                    &mut self.drawing_state.current_tool,
+                                    &mut self.state.current_tool,
                                     Tool::Background,
-                                    "🎨 背景",
+                                    "背景",
+                                )
+                                .changed()
+                            || ui
+                                .selectable_value(
+                                    &mut self.state.current_tool,
+                                    Tool::Settings,
+                                    "设置",
                                 )
                                 .changed()
                         {
-                            if self.drawing_state.current_tool != old_tool {
-                                self.drawing_state.selected_object = None;
+                            if self.state.current_tool != old_tool {
+                                self.state.selected_object = None;
                             }
                         }
                     });
 
+                    // 设置工具相关设置
+                    if self.state.current_tool == Tool::Settings {
+                        ui.horizontal(|ui| {
+                            ui.label("显示 FPS:");
+                            ui.checkbox(&mut self.state.show_fps, "启用");
+                            if ui.button("调试: 引发异常").clicked() {
+                                panic!("test panic")
+                            }
+                        });
+                    }
+
                     ui.separator();
 
                     // 画笔相关设置
-                    if self.drawing_state.current_tool == Tool::Brush {
+                    if self.state.current_tool == Tool::Brush {
                         ui.horizontal(|ui| {
                             ui.label("颜色:");
-                            let old_color = self.drawing_state.brush_color;
+                            let old_color = self.state.brush_color;
                             if ui
-                                .color_edit_button_srgba(&mut self.drawing_state.brush_color)
+                                .color_edit_button_srgba(&mut self.state.brush_color)
                                 .changed()
                             {
                                 // 颜色改变时，如果正在绘制，结束当前笔画（使用旧颜色）
-                                if self.drawing_state.is_drawing {
-                                    if let Some(points) = self.drawing_state.current_stroke.take() {
+                                if self.state.is_drawing {
+                                    if let Some(points) = self.state.current_stroke.take() {
                                         if let Some(widths) =
-                                            self.drawing_state.current_stroke_widths.take()
+                                            self.state.current_stroke_widths.take()
                                         {
                                             if points.len() > 1 {
-                                                self.drawing_state.strokes.push(DrawingStroke {
+                                                self.state.strokes.push(DrawingStroke {
                                                     points,
                                                     widths,
                                                     color: old_color,
-                                                    base_width: self.drawing_state.brush_width,
+                                                    base_width: self.state.brush_width,
                                                 });
                                             }
                                         }
                                     }
-                                    self.drawing_state.current_stroke_times = None;
-                                    self.drawing_state.stroke_start_time = None;
-                                    self.drawing_state.is_drawing = false;
+                                    self.state.current_stroke_times = None;
+                                    self.state.stroke_start_time = None;
+                                    self.state.is_drawing = false;
                                 }
                             }
                         });
 
                         ui.horizontal(|ui| {
                             ui.label("画笔宽度:");
-                            let slider_response = ui.add(egui::Slider::new(
-                                &mut self.drawing_state.brush_width,
-                                1.0..=20.0,
-                            ));
+                            let slider_response =
+                                ui.add(egui::Slider::new(&mut self.state.brush_width, 1.0..=20.0));
 
                             // 显示大小预览
                             if slider_response.dragged() || slider_response.hovered() {
-                                self.drawing_state.show_size_preview = true;
-                                self.drawing_state.size_preview_size =
-                                    self.drawing_state.brush_width;
+                                self.state.show_size_preview = true;
+                                self.state.size_preview_size = self.state.brush_width;
                                 // 使用屏幕中心位置
                                 let content_rect = ui.ctx().available_rect();
-                                self.drawing_state.size_preview_pos = content_rect.center();
+                                self.state.size_preview_pos = content_rect.center();
                             } else if !slider_response.dragged() && !slider_response.hovered() {
-                                self.drawing_state.show_size_preview = false;
+                                self.state.show_size_preview = false;
                             }
                         });
 
@@ -564,17 +638,17 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label("动态画笔宽度微调:");
                             ui.selectable_value(
-                                &mut self.drawing_state.dynamic_brush_mode,
+                                &mut self.state.dynamic_brush_mode,
                                 DynamicBrushMode::Disabled,
                                 "禁用",
                             );
                             ui.selectable_value(
-                                &mut self.drawing_state.dynamic_brush_mode,
+                                &mut self.state.dynamic_brush_mode,
                                 DynamicBrushMode::BrushTip,
                                 "模拟笔锋",
                             );
                             ui.selectable_value(
-                                &mut self.drawing_state.dynamic_brush_mode,
+                                &mut self.state.dynamic_brush_mode,
                                 DynamicBrushMode::SpeedBased,
                                 "基于速度",
                             );
@@ -582,48 +656,45 @@ impl App {
 
                         ui.horizontal(|ui| {
                             ui.label("笔迹平滑:");
-                            ui.checkbox(&mut self.drawing_state.stroke_smoothing, "启用");
+                            ui.checkbox(&mut self.state.stroke_smoothing, "启用");
                         });
                     }
 
                     // 橡皮擦相关设置
-                    if self.drawing_state.current_tool == Tool::ObjectEraser
-                        || self.drawing_state.current_tool == Tool::PixelEraser
+                    if self.state.current_tool == Tool::ObjectEraser
+                        || self.state.current_tool == Tool::PixelEraser
                     {
                         ui.horizontal(|ui| {
                             ui.label("橡皮擦大小:");
-                            let slider_response = ui.add(egui::Slider::new(
-                                &mut self.drawing_state.eraser_size,
-                                5.0..=50.0,
-                            ));
+                            let slider_response =
+                                ui.add(egui::Slider::new(&mut self.state.eraser_size, 5.0..=50.0));
 
                             ui.separator();
 
                             // 显示大小预览
                             if slider_response.dragged() || slider_response.hovered() {
-                                self.drawing_state.show_size_preview = true;
-                                self.drawing_state.size_preview_size =
-                                    self.drawing_state.eraser_size;
+                                self.state.show_size_preview = true;
+                                self.state.size_preview_size = self.state.eraser_size;
                                 // 使用屏幕中心位置
                                 let content_rect = ui.ctx().available_rect();
-                                self.drawing_state.size_preview_pos = content_rect.center();
+                                self.state.size_preview_pos = content_rect.center();
                             } else if !slider_response.dragged() && !slider_response.hovered() {
-                                self.drawing_state.show_size_preview = false;
+                                self.state.show_size_preview = false;
                             }
 
                             if ui.button("清空画布").clicked() {
-                                self.drawing_state.strokes.clear();
-                                self.drawing_state.images.clear();
-                                self.drawing_state.texts.clear();
-                                self.drawing_state.current_stroke = None;
-                                self.drawing_state.is_drawing = false;
-                                self.drawing_state.selected_object = None;
+                                self.state.strokes.clear();
+                                self.state.images.clear();
+                                self.state.texts.clear();
+                                self.state.current_stroke = None;
+                                self.state.is_drawing = false;
+                                self.state.selected_object = None;
                             }
                         });
                     }
 
                     // 插入工具相关设置
-                    if self.drawing_state.current_tool == Tool::Insert {
+                    if self.state.current_tool == Tool::Insert {
                         ui.horizontal(|ui| {
                             if ui.button("图片").clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
@@ -655,21 +726,25 @@ impl App {
                                             egui::TextureOptions::LINEAR,
                                         );
 
-                                        self.drawing_state.images.push(InsertedImage {
+                                        self.state.images.push(InsertedImage {
                                             texture,
                                             pos: Pos2::new(100.0, 100.0),
                                             size: egui::vec2(target_width, target_height),
                                             aspect_ratio,
+                                            marked_for_deletion: false,
                                         });
                                     }
                                 }
                             }
                             if ui.button("文本").clicked() {
-                                self.show_text_dialog = true;
+                                self.state.show_text_dialog = true;
+                            }
+                            if ui.button("形状").clicked() {
+                                self.state.show_shape_dialog = true;
                             }
                         });
 
-                        if self.show_text_dialog {
+                        if self.state.show_text_dialog {
                             // 计算屏幕中心位置
                             let content_rect = ctx.available_rect();
                             let center_pos = content_rect.center();
@@ -682,24 +757,104 @@ impl App {
                                 .show(ctx, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label("文本内容:");
-                                        ui.text_edit_singleline(&mut self.new_text_content);
+                                        ui.text_edit_singleline(&mut self.state.new_text_content);
                                     });
 
                                     ui.horizontal(|ui| {
                                         if ui.button("确认").clicked() {
-                                            self.drawing_state.texts.push(InsertedText {
-                                                text: self.new_text_content.clone(),
+                                            self.state.texts.push(InsertedText {
+                                                text: self.state.new_text_content.clone(),
                                                 pos: Pos2::new(100.0, 100.0),
                                                 color: Color32::WHITE,
                                                 font_size: 16.0,
                                             });
-                                            self.show_text_dialog = false;
-                                            self.new_text_content.clear();
+                                            self.state.show_text_dialog = false;
+                                            self.state.new_text_content.clear();
                                         }
 
                                         if ui.button("取消").clicked() {
-                                            self.show_text_dialog = false;
-                                            self.new_text_content.clear();
+                                            self.state.show_text_dialog = false;
+                                            self.state.new_text_content.clear();
+                                        }
+                                    });
+                                });
+                        }
+
+                        if self.state.show_shape_dialog {
+                            // 计算屏幕中心位置
+                            let content_rect = ctx.available_rect();
+                            let center_pos = content_rect.center();
+
+                            egui::Window::new("插入形状")
+                                .collapsible(false)
+                                .resizable(false)
+                                .pivot(egui::Align2::CENTER_CENTER)
+                                .default_pos([center_pos.x, center_pos.y])
+                                .show(ctx, |ui| {
+                                    ui.label("选择要插入的形状:");
+
+                                    ui.horizontal(|ui| {
+                                        if ui.button("线").clicked() {
+                                            self.state.shapes.push(InsertedShape {
+                                                shape_type: ShapeType::Line,
+                                                pos: Pos2::new(100.0, 100.0),
+                                                size: 100.0,
+                                                color: Color32::WHITE,
+                                                rotation: 0.0,
+                                            });
+                                            self.state.show_shape_dialog = false;
+                                        }
+
+                                        if ui.button("箭头").clicked() {
+                                            self.state.shapes.push(InsertedShape {
+                                                shape_type: ShapeType::Arrow,
+                                                pos: Pos2::new(100.0, 100.0),
+                                                size: 100.0,
+                                                color: Color32::WHITE,
+                                                rotation: 0.0,
+                                            });
+                                            self.state.show_shape_dialog = false;
+                                        }
+
+                                        if ui.button("矩形").clicked() {
+                                            self.state.shapes.push(InsertedShape {
+                                                shape_type: ShapeType::Rectangle,
+                                                pos: Pos2::new(100.0, 100.0),
+                                                size: 100.0,
+                                                color: Color32::WHITE,
+                                                rotation: 0.0,
+                                            });
+                                            self.state.show_shape_dialog = false;
+                                        }
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        if ui.button("三角形").clicked() {
+                                            self.state.shapes.push(InsertedShape {
+                                                shape_type: ShapeType::Triangle,
+                                                pos: Pos2::new(100.0, 100.0),
+                                                size: 100.0,
+                                                color: Color32::WHITE,
+                                                rotation: 0.0,
+                                            });
+                                            self.state.show_shape_dialog = false;
+                                        }
+
+                                        if ui.button("圆形").clicked() {
+                                            self.state.shapes.push(InsertedShape {
+                                                shape_type: ShapeType::Circle,
+                                                pos: Pos2::new(100.0, 100.0),
+                                                size: 100.0,
+                                                color: Color32::WHITE,
+                                                rotation: 0.0,
+                                            });
+                                            self.state.show_shape_dialog = false;
+                                        }
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        if ui.button("取消").clicked() {
+                                            self.state.show_shape_dialog = false;
                                         }
                                     });
                                 });
@@ -707,18 +862,24 @@ impl App {
                     }
 
                     // 背景工具相关设置
-                    if self.drawing_state.current_tool == Tool::Background {
+                    if self.state.current_tool == Tool::Background {
                         ui.horizontal(|ui| {
-                            ui.label("背景颜色:");
-                            ui.color_edit_button_srgba(&mut self.drawing_state.background_color);
+                            ui.label("颜色:");
+                            ui.color_edit_button_srgba(&mut self.state.background_color);
                         });
                     }
 
                     ui.separator();
 
                     ui.horizontal(|ui| {
+                        if self.state.show_fps {
+                            ui.label(format!(
+                                "FPS: {}",
+                                self.state.fps_counter.current_fps.to_string()
+                            ));
+                        }
                         if ui.button("退出").clicked() {
-                            self.should_quit = true;
+                            self.state.should_quit = true;
                         }
                     });
                 });
@@ -731,10 +892,14 @@ impl App {
                 let painter = ui.painter();
 
                 // 绘制背景
-                painter.rect_filled(rect, 0.0, self.drawing_state.background_color);
+                painter.rect_filled(rect, 0.0, self.state.background_color);
 
-                // 绘制所有图片
-                for (i, img) in self.drawing_state.images.iter().enumerate() {
+                // 绘制所有图片（跳过已标记为删除的图片）
+                for (i, img) in self.state.images.iter().enumerate() {
+                    if img.marked_for_deletion {
+                        continue;
+                    }
+
                     let img_rect = egui::Rect::from_min_size(img.pos, img.size);
                     painter.image(
                         img.texture.id(),
@@ -744,9 +909,7 @@ impl App {
                     );
 
                     // 如果被选中，绘制边框
-                    if let Some(SelectedObject::Image(selected_idx)) =
-                        self.drawing_state.selected_object
-                    {
+                    if let Some(SelectedObject::Image(selected_idx)) = self.state.selected_object {
                         if i == selected_idx {
                             painter.rect_stroke(
                                 img_rect,
@@ -759,7 +922,7 @@ impl App {
                 }
 
                 // 绘制所有文本
-                for (i, text) in self.drawing_state.texts.iter().enumerate() {
+                for (i, text) in self.state.texts.iter().enumerate() {
                     // Draw text using egui's text rendering
                     painter.text(
                         text.pos,
@@ -769,9 +932,7 @@ impl App {
                         text.color,
                     );
 
-                    if let Some(SelectedObject::Text(selected_idx)) =
-                        self.drawing_state.selected_object
-                    {
+                    if let Some(SelectedObject::Text(selected_idx)) = self.state.selected_object {
                         if i == selected_idx {
                             let text_size = painter
                                 .text(
@@ -794,14 +955,155 @@ impl App {
                     }
                 }
 
+                // 绘制所有形状
+                for (i, shape) in self.state.shapes.iter().enumerate() {
+                    // 绘制形状本身
+                    match shape.shape_type {
+                        ShapeType::Line => {
+                            let end_point = Pos2::new(shape.pos.x + shape.size, shape.pos.y);
+                            painter.line_segment(
+                                [shape.pos, end_point],
+                                Stroke::new(2.0, shape.color),
+                            );
+                        }
+                        ShapeType::Arrow => {
+                            let end_point = Pos2::new(shape.pos.x + shape.size, shape.pos.y);
+                            painter.line_segment(
+                                [shape.pos, end_point],
+                                Stroke::new(2.0, shape.color),
+                            );
+
+                            // 绘制箭头头部
+                            let arrow_size = shape.size * 0.1;
+                            let arrow_angle = std::f32::consts::PI / 6.0; // 30度
+                            let arrow_point1 = Pos2::new(
+                                end_point.x - arrow_size * arrow_angle.cos(),
+                                end_point.y - arrow_size * arrow_angle.sin(),
+                            );
+                            let arrow_point2 = Pos2::new(
+                                end_point.x - arrow_size * arrow_angle.cos(),
+                                end_point.y + arrow_size * arrow_angle.sin(),
+                            );
+
+                            painter.line_segment(
+                                [end_point, arrow_point1],
+                                Stroke::new(2.0, shape.color),
+                            );
+                            painter.line_segment(
+                                [end_point, arrow_point2],
+                                Stroke::new(2.0, shape.color),
+                            );
+                        }
+                        ShapeType::Rectangle => {
+                            let rect = egui::Rect::from_min_size(
+                                shape.pos,
+                                egui::vec2(shape.size, shape.size),
+                            );
+                            painter.rect_stroke(
+                                rect,
+                                0.0,
+                                Stroke::new(2.0, shape.color),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        ShapeType::Triangle => {
+                            let half_size = shape.size / 2.0;
+                            let points = [
+                                shape.pos,
+                                Pos2::new(shape.pos.x + shape.size, shape.pos.y),
+                                Pos2::new(shape.pos.x + half_size, shape.pos.y + half_size),
+                            ];
+                            painter.add(egui::Shape::convex_polygon(
+                                points.to_vec(),
+                                shape.color,
+                                Stroke::new(2.0, shape.color),
+                            ));
+                        }
+                        ShapeType::Circle => {
+                            painter.circle_stroke(
+                                shape.pos,
+                                shape.size / 2.0,
+                                Stroke::new(2.0, shape.color),
+                            );
+                        }
+                    }
+
+                    // 如果被选中，绘制边框
+                    if let Some(SelectedObject::Shape(selected_idx)) = self.state.selected_object {
+                        if i == selected_idx {
+                            let shape_rect = match shape.shape_type {
+                                ShapeType::Line => {
+                                    let end_point =
+                                        Pos2::new(shape.pos.x + shape.size, shape.pos.y);
+                                    let min_x = shape.pos.x.min(end_point.x) - 5.0;
+                                    let max_x = shape.pos.x.max(end_point.x) + 5.0;
+                                    let min_y = shape.pos.y.min(end_point.y) - 5.0;
+                                    let max_y = shape.pos.y.max(end_point.y) + 5.0;
+                                    egui::Rect::from_min_max(
+                                        Pos2::new(min_x, min_y),
+                                        Pos2::new(max_x, max_y),
+                                    )
+                                }
+                                ShapeType::Arrow => {
+                                    let end_point =
+                                        Pos2::new(shape.pos.x + shape.size, shape.pos.y);
+                                    let min_x = shape.pos.x.min(end_point.x) - 5.0;
+                                    let max_x = shape.pos.x.max(end_point.x) + 5.0;
+                                    let min_y = shape.pos.y.min(end_point.y) - 15.0;
+                                    let max_y = shape.pos.y.max(end_point.y) + 15.0;
+                                    egui::Rect::from_min_max(
+                                        Pos2::new(min_x, min_y),
+                                        Pos2::new(max_x, max_y),
+                                    )
+                                }
+                                ShapeType::Rectangle => egui::Rect::from_min_size(
+                                    shape.pos,
+                                    egui::vec2(shape.size, shape.size),
+                                ),
+                                ShapeType::Triangle => {
+                                    let half_size = shape.size / 2.0;
+                                    let min_x = shape.pos.x - 5.0;
+                                    let max_x = shape.pos.x + shape.size + 5.0;
+                                    let min_y = shape.pos.y - 5.0;
+                                    let max_y = shape.pos.y + half_size + 5.0;
+                                    egui::Rect::from_min_max(
+                                        Pos2::new(min_x, min_y),
+                                        Pos2::new(max_x, max_y),
+                                    )
+                                }
+                                ShapeType::Circle => {
+                                    let radius = shape.size / 2.0;
+                                    egui::Rect::from_min_max(
+                                        Pos2::new(
+                                            shape.pos.x - radius - 5.0,
+                                            shape.pos.y - radius - 5.0,
+                                        ),
+                                        Pos2::new(
+                                            shape.pos.x + radius + 5.0,
+                                            shape.pos.y + radius + 5.0,
+                                        ),
+                                    )
+                                }
+                            };
+
+                            painter.rect_stroke(
+                                shape_rect,
+                                0.0,
+                                Stroke::new(2.0, Color32::BLUE),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                    }
+                }
+
                 // 绘制所有已完成的笔画 - 支持动态宽度
-                for (i, stroke) in self.drawing_state.strokes.iter().enumerate() {
+                for (i, stroke) in self.state.strokes.iter().enumerate() {
                     if stroke.points.len() < 2 {
                         continue;
                     }
 
                     let color = if let Some(SelectedObject::Stroke(selected_idx)) =
-                        self.drawing_state.selected_object
+                        self.state.selected_object
                     {
                         if i == selected_idx {
                             Color32::BLUE
@@ -842,8 +1144,8 @@ impl App {
                 }
 
                 // 绘制当前正在绘制的笔画 - 支持动态宽度
-                if let Some(ref points) = self.drawing_state.current_stroke {
-                    if let Some(ref widths) = self.drawing_state.current_stroke_widths {
+                if let Some(ref points) = self.state.current_stroke {
+                    if let Some(ref widths) = self.state.current_stroke_widths {
                         if points.len() >= 2 && widths.len() == points.len() {
                             // 检查是否所有宽度相同
                             let all_same_width =
@@ -853,13 +1155,13 @@ impl App {
                                 // 只有两个点且宽度相同
                                 painter.line_segment(
                                     [points[0], points[1]],
-                                    Stroke::new(widths[0], self.drawing_state.brush_color),
+                                    Stroke::new(widths[0], self.state.brush_color),
                                 );
                             } else if all_same_width {
                                 // 多个点但宽度相同
                                 let path = egui::epaint::PathShape::line(
                                     points.clone(),
-                                    Stroke::new(widths[0], self.drawing_state.brush_color),
+                                    Stroke::new(widths[0], self.state.brush_color),
                                 );
                                 painter.add(Shape::Path(path));
                             } else {
@@ -868,7 +1170,7 @@ impl App {
                                     let avg_width = (widths[i] + widths[i + 1]) / 2.0;
                                     painter.line_segment(
                                         [points[i], points[i + 1]],
-                                        Stroke::new(avg_width, self.drawing_state.brush_color),
+                                        Stroke::new(avg_width, self.state.brush_color),
                                     );
                                 }
                             }
@@ -877,11 +1179,11 @@ impl App {
                 }
 
                 // 绘制大小预览圆圈
-                if self.drawing_state.show_size_preview {
+                if self.state.show_size_preview {
                     const PREVIEW_BORDER_WIDTH: f32 = 2.0;
 
-                    let preview_pos = self.drawing_state.size_preview_pos;
-                    let preview_size = self.drawing_state.size_preview_size;
+                    let preview_pos = self.state.size_preview_pos;
+                    let preview_size = self.state.size_preview_size;
                     let radius = preview_size / PREVIEW_BORDER_WIDTH;
 
                     // 绘制白色填充的圆
@@ -898,25 +1200,24 @@ impl App {
                 // 处理鼠标输入
                 let pointer_pos = response.interact_pointer_pos();
 
-                match self.drawing_state.current_tool {
+                match self.state.current_tool {
                     Tool::Select => {
                         if response.drag_started() {
                             if let Some(pos) = pointer_pos {
-                                self.drawing_state.drag_start_pos = Some(pos);
-                                self.drawing_state.selected_object = None;
+                                self.state.drag_start_pos = Some(pos);
+                                self.state.selected_object = None;
 
                                 // 检查图片
-                                for (i, img) in self.drawing_state.images.iter().enumerate().rev() {
+                                for (i, img) in self.state.images.iter().enumerate().rev() {
                                     let img_rect = egui::Rect::from_min_size(img.pos, img.size);
                                     if img_rect.contains(pos) {
-                                        self.drawing_state.selected_object =
-                                            Some(SelectedObject::Image(i));
+                                        self.state.selected_object = Some(SelectedObject::Image(i));
                                         break;
                                     }
                                 }
 
                                 // 检查文本
-                                for (i, text) in self.drawing_state.texts.iter().enumerate().rev() {
+                                for (i, text) in self.state.texts.iter().enumerate().rev() {
                                     // 使用 painter 来计算文本大小
                                     let text_size = painter
                                         .text(
@@ -930,19 +1231,86 @@ impl App {
 
                                     let text_rect = egui::Rect::from_min_size(text.pos, text_size);
                                     if text_rect.contains(pos) {
-                                        self.drawing_state.selected_object =
-                                            Some(SelectedObject::Text(i));
+                                        self.state.selected_object = Some(SelectedObject::Text(i));
                                         break;
                                     }
                                 }
 
+                                // 检查形状
+                                if self.state.selected_object.is_none() {
+                                    for (i, shape) in self.state.shapes.iter().enumerate().rev() {
+                                        let shape_rect = match shape.shape_type {
+                                            ShapeType::Line => {
+                                                let end_point = Pos2::new(
+                                                    shape.pos.x + shape.size,
+                                                    shape.pos.y,
+                                                );
+                                                let min_x = shape.pos.x.min(end_point.x) - 5.0;
+                                                let max_x = shape.pos.x.max(end_point.x) + 5.0;
+                                                let min_y = shape.pos.y.min(end_point.y) - 5.0;
+                                                let max_y = shape.pos.y.max(end_point.y) + 5.0;
+                                                egui::Rect::from_min_max(
+                                                    Pos2::new(min_x, min_y),
+                                                    Pos2::new(max_x, max_y),
+                                                )
+                                            }
+                                            ShapeType::Arrow => {
+                                                let end_point = Pos2::new(
+                                                    shape.pos.x + shape.size,
+                                                    shape.pos.y,
+                                                );
+                                                let min_x = shape.pos.x.min(end_point.x) - 5.0;
+                                                let max_x = shape.pos.x.max(end_point.x) + 5.0;
+                                                let min_y = shape.pos.y.min(end_point.y) - 15.0;
+                                                let max_y = shape.pos.y.max(end_point.y) + 15.0;
+                                                egui::Rect::from_min_max(
+                                                    Pos2::new(min_x, min_y),
+                                                    Pos2::new(max_x, max_y),
+                                                )
+                                            }
+                                            ShapeType::Rectangle => egui::Rect::from_min_size(
+                                                shape.pos,
+                                                egui::vec2(shape.size, shape.size),
+                                            ),
+                                            ShapeType::Triangle => {
+                                                let half_size = shape.size / 2.0;
+                                                let min_x = shape.pos.x - 5.0;
+                                                let max_x = shape.pos.x + shape.size + 5.0;
+                                                let min_y = shape.pos.y - 5.0;
+                                                let max_y = shape.pos.y + half_size + 5.0;
+                                                egui::Rect::from_min_max(
+                                                    Pos2::new(min_x, min_y),
+                                                    Pos2::new(max_x, max_y),
+                                                )
+                                            }
+                                            ShapeType::Circle => {
+                                                let radius = shape.size / 2.0;
+                                                egui::Rect::from_min_max(
+                                                    Pos2::new(
+                                                        shape.pos.x - radius - 5.0,
+                                                        shape.pos.y - radius - 5.0,
+                                                    ),
+                                                    Pos2::new(
+                                                        shape.pos.x + radius + 5.0,
+                                                        shape.pos.y + radius + 5.0,
+                                                    ),
+                                                )
+                                            }
+                                        };
+
+                                        if shape_rect.contains(pos) {
+                                            self.state.selected_object =
+                                                Some(SelectedObject::Shape(i));
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 // 检查笔画
-                                if self.drawing_state.selected_object.is_none() {
-                                    for (i, stroke) in
-                                        self.drawing_state.strokes.iter().enumerate().rev()
-                                    {
+                                if self.state.selected_object.is_none() {
+                                    for (i, stroke) in self.state.strokes.iter().enumerate().rev() {
                                         if Self::point_intersects_stroke(pos, stroke, 10.0) {
-                                            self.drawing_state.selected_object =
+                                            self.state.selected_object =
                                                 Some(SelectedObject::Stroke(i));
                                             break;
                                         }
@@ -953,14 +1321,14 @@ impl App {
                             // 点击非对象区域时取消选择
                             if let Some(pos) = pointer_pos {
                                 let mut hit = false;
-                                for img in &self.drawing_state.images {
+                                for img in &self.state.images {
                                     if egui::Rect::from_min_size(img.pos, img.size).contains(pos) {
                                         hit = true;
                                         break;
                                     }
                                 }
                                 if !hit {
-                                    for stroke in &self.drawing_state.strokes {
+                                    for stroke in &self.state.strokes {
                                         if Self::point_intersects_stroke(pos, stroke, 10.0) {
                                             hit = true;
                                             break;
@@ -968,34 +1336,37 @@ impl App {
                                     }
                                 }
                                 if !hit {
-                                    self.drawing_state.selected_object = None;
+                                    self.state.selected_object = None;
                                 }
                             }
                         } else if response.dragged() {
                             if let (Some(pos), Some(start_pos)) =
-                                (pointer_pos, self.drawing_state.drag_start_pos)
+                                (pointer_pos, self.state.drag_start_pos)
                             {
                                 let delta = pos - start_pos;
-                                self.drawing_state.drag_start_pos = Some(pos);
+                                self.state.drag_start_pos = Some(pos);
 
-                                match self.drawing_state.selected_object {
+                                match self.state.selected_object {
                                     Some(SelectedObject::Image(idx)) => {
-                                        if let Some(img) = self.drawing_state.images.get_mut(idx) {
+                                        if let Some(img) = self.state.images.get_mut(idx) {
                                             img.pos += delta;
                                         }
                                     }
                                     Some(SelectedObject::Stroke(idx)) => {
-                                        if let Some(stroke) =
-                                            self.drawing_state.strokes.get_mut(idx)
-                                        {
+                                        if let Some(stroke) = self.state.strokes.get_mut(idx) {
                                             for p in &mut stroke.points {
                                                 *p += delta;
                                             }
                                         }
                                     }
                                     Some(SelectedObject::Text(idx)) => {
-                                        if let Some(text) = self.drawing_state.texts.get_mut(idx) {
+                                        if let Some(text) = self.state.texts.get_mut(idx) {
                                             text.pos += delta;
+                                        }
+                                    }
+                                    Some(SelectedObject::Shape(idx)) => {
+                                        if let Some(shape) = self.state.shapes.get_mut(idx) {
+                                            shape.pos += delta;
                                         }
                                     }
                                     None => {}
@@ -1009,24 +1380,119 @@ impl App {
                     }
 
                     Tool::ObjectEraser => {
-                        // 对象橡皮擦：点击或拖拽时删除相交的整个笔画
+                        // 对象橡皮擦：点击或拖拽时删除相交的整个对象
                         if response.drag_started() || response.clicked() || response.dragged() {
                             if let Some(pos) = pointer_pos {
                                 // 从后往前删除，避免索引问题
+
+                                // 标记图片为删除（延迟删除以避免Vulkan资源冲突）
+                                for img in &mut self.state.images {
+                                    let img_rect = egui::Rect::from_min_size(img.pos, img.size);
+                                    if img_rect.contains(pos) {
+                                        img.marked_for_deletion = true;
+                                    }
+                                }
+
+                                // 删除文本
+                                let mut to_remove_texts = Vec::new();
+                                for (i, text) in self.state.texts.iter().enumerate().rev() {
+                                    let text_size = painter
+                                        .text(
+                                            Pos2::new(0.0, 0.0),
+                                            egui::Align2::LEFT_TOP,
+                                            &text.text,
+                                            egui::FontId::proportional(text.font_size),
+                                            text.color,
+                                        )
+                                        .size();
+                                    let text_rect = egui::Rect::from_min_size(text.pos, text_size);
+                                    if text_rect.contains(pos) {
+                                        to_remove_texts.push(i);
+                                    }
+                                }
+                                for i in to_remove_texts {
+                                    self.state.texts.remove(i);
+                                }
+
+                                // 删除形状
+                                let mut to_remove_shapes = Vec::new();
+                                for (i, shape) in self.state.shapes.iter().enumerate().rev() {
+                                    let shape_rect = match shape.shape_type {
+                                        ShapeType::Line => {
+                                            let end_point =
+                                                Pos2::new(shape.pos.x + shape.size, shape.pos.y);
+                                            let min_x = shape.pos.x.min(end_point.x) - 5.0;
+                                            let max_x = shape.pos.x.max(end_point.x) + 5.0;
+                                            let min_y = shape.pos.y.min(end_point.y) - 5.0;
+                                            let max_y = shape.pos.y.max(end_point.y) + 5.0;
+                                            egui::Rect::from_min_max(
+                                                Pos2::new(min_x, min_y),
+                                                Pos2::new(max_x, max_y),
+                                            )
+                                        }
+                                        ShapeType::Arrow => {
+                                            let end_point =
+                                                Pos2::new(shape.pos.x + shape.size, shape.pos.y);
+                                            let min_x = shape.pos.x.min(end_point.x) - 5.0;
+                                            let max_x = shape.pos.x.max(end_point.x) + 5.0;
+                                            let min_y = shape.pos.y.min(end_point.y) - 15.0;
+                                            let max_y = shape.pos.y.max(end_point.y) + 15.0;
+                                            egui::Rect::from_min_max(
+                                                Pos2::new(min_x, min_y),
+                                                Pos2::new(max_x, max_y),
+                                            )
+                                        }
+                                        ShapeType::Rectangle => egui::Rect::from_min_size(
+                                            shape.pos,
+                                            egui::vec2(shape.size, shape.size),
+                                        ),
+                                        ShapeType::Triangle => {
+                                            let half_size = shape.size / 2.0;
+                                            let min_x = shape.pos.x - 5.0;
+                                            let max_x = shape.pos.x + shape.size + 5.0;
+                                            let min_y = shape.pos.y - 5.0;
+                                            let max_y = shape.pos.y + half_size + 5.0;
+                                            egui::Rect::from_min_max(
+                                                Pos2::new(min_x, min_y),
+                                                Pos2::new(max_x, max_y),
+                                            )
+                                        }
+                                        ShapeType::Circle => {
+                                            let radius = shape.size / 2.0;
+                                            egui::Rect::from_min_max(
+                                                Pos2::new(
+                                                    shape.pos.x - radius - 5.0,
+                                                    shape.pos.y - radius - 5.0,
+                                                ),
+                                                Pos2::new(
+                                                    shape.pos.x + radius + 5.0,
+                                                    shape.pos.y + radius + 5.0,
+                                                ),
+                                            )
+                                        }
+                                    };
+
+                                    if shape_rect.contains(pos) {
+                                        to_remove_shapes.push(i);
+                                    }
+                                }
+                                for i in to_remove_shapes {
+                                    self.state.shapes.remove(i);
+                                }
+
+                                // 删除笔画
                                 let mut to_remove = Vec::new();
-                                for (i, stroke) in
-                                    self.drawing_state.strokes.iter().enumerate().rev()
-                                {
+                                for (i, stroke) in self.state.strokes.iter().enumerate().rev() {
                                     if Self::point_intersects_stroke(
                                         pos,
                                         stroke,
-                                        self.drawing_state.eraser_size,
+                                        self.state.eraser_size,
                                     ) {
                                         to_remove.push(i);
                                     }
                                 }
                                 for i in to_remove {
-                                    self.drawing_state.strokes.remove(i);
+                                    self.state.strokes.remove(i);
                                 }
                             }
                         }
@@ -1036,14 +1502,13 @@ impl App {
                         // 像素橡皮擦：从笔画中移除被擦除的点
                         if response.drag_started() {
                             if let Some(pos) = pointer_pos {
-                                self.drawing_state.is_drawing = true;
-                                self.drawing_state.current_stroke = Some(vec![pos]);
+                                self.state.is_drawing = true;
+                                self.state.current_stroke = Some(vec![pos]);
                             }
                         } else if response.dragged() {
-                            if self.drawing_state.is_drawing {
+                            if self.state.is_drawing {
                                 if let Some(pos) = pointer_pos {
-                                    if let Some(ref mut points) = self.drawing_state.current_stroke
-                                    {
+                                    if let Some(ref mut points) = self.state.current_stroke {
                                         if points.is_empty()
                                             || points.last().unwrap().distance(pos) > 1.0
                                         {
@@ -1052,8 +1517,8 @@ impl App {
                                     }
 
                                     // 从所有笔画中移除被橡皮擦覆盖的点
-                                    let eraser_radius = self.drawing_state.eraser_size / 2.0;
-                                    for stroke in &mut self.drawing_state.strokes {
+                                    let eraser_radius = self.state.eraser_size / 2.0;
+                                    for stroke in &mut self.state.strokes {
                                         let mut new_points = Vec::new();
                                         let mut new_widths = Vec::new();
 
@@ -1072,13 +1537,17 @@ impl App {
                                     }
 
                                     // 移除空的笔画
-                                    self.drawing_state.strokes.retain(|s| s.points.len() >= 2);
+                                    self.state.strokes.retain(|s| s.points.len() >= 2);
                                 }
                             }
                         } else if response.drag_stopped() {
-                            self.drawing_state.is_drawing = false;
-                            self.drawing_state.current_stroke = None;
+                            self.state.is_drawing = false;
+                            self.state.current_stroke = None;
                         }
+                    }
+
+                    Tool::Settings => {
+                        // 设置工具：不处理画布交互，通过UI控制
                     }
 
                     Tool::Brush => {
@@ -1091,39 +1560,38 @@ impl App {
                                     && pos.y >= rect.min.y
                                     && pos.y <= rect.max.y
                                 {
-                                    self.drawing_state.is_drawing = true;
-                                    self.drawing_state.current_stroke = Some(vec![pos]);
+                                    self.state.is_drawing = true;
+                                    self.state.current_stroke = Some(vec![pos]);
                                     let start_time = Instant::now();
-                                    self.drawing_state.stroke_start_time = Some(start_time);
-                                    self.drawing_state.current_stroke_times = Some(vec![0.0]);
+                                    self.state.stroke_start_time = Some(start_time);
+                                    self.state.current_stroke_times = Some(vec![0.0]);
                                     let width = Self::calculate_dynamic_width(
-                                        self.drawing_state.brush_width,
-                                        self.drawing_state.dynamic_brush_mode,
+                                        self.state.brush_width,
+                                        self.state.dynamic_brush_mode,
                                         0,
                                         1,
                                         None,
                                     );
-                                    self.drawing_state.current_stroke_widths = Some(vec![width]);
+                                    self.state.current_stroke_widths = Some(vec![width]);
                                 }
                             }
                         } else if response.dragged() {
                             // 继续绘制
-                            if self.drawing_state.is_drawing {
+                            if self.state.is_drawing {
                                 if let Some(pos) = pointer_pos {
-                                    if let Some(ref mut points) = self.drawing_state.current_stroke
-                                    {
+                                    if let Some(ref mut points) = self.state.current_stroke {
                                         if let Some(ref mut widths) =
-                                            self.drawing_state.current_stroke_widths
+                                            self.state.current_stroke_widths
                                         {
                                             if let Some(ref mut times) =
-                                                self.drawing_state.current_stroke_times
+                                                self.state.current_stroke_times
                                             {
                                                 // 只添加与上一个点距离足够远的点，避免点太密集
                                                 if points.is_empty()
                                                     || points.last().unwrap().distance(pos) > 1.0
                                                 {
                                                     let current_time = if let Some(start) =
-                                                        self.drawing_state.stroke_start_time
+                                                        self.state.stroke_start_time
                                                     {
                                                         start.elapsed().as_secs_f64()
                                                     } else {
@@ -1150,8 +1618,8 @@ impl App {
 
                                                     // 计算动态宽度
                                                     let width = Self::calculate_dynamic_width(
-                                                        self.drawing_state.brush_width,
-                                                        self.drawing_state.dynamic_brush_mode,
+                                                        self.state.brush_width,
+                                                        self.state.dynamic_brush_mode,
                                                         points.len() - 1,
                                                         points.len(),
                                                         speed,
@@ -1165,50 +1633,44 @@ impl App {
                             }
                         } else if response.drag_stopped() {
                             // 结束当前笔画
-                            if self.drawing_state.is_drawing {
-                                if let Some(points) = self.drawing_state.current_stroke.take() {
-                                    if let Some(widths) =
-                                        self.drawing_state.current_stroke_widths.take()
-                                    {
+                            if self.state.is_drawing {
+                                if let Some(points) = self.state.current_stroke.take() {
+                                    if let Some(widths) = self.state.current_stroke_widths.take() {
                                         if points.len() > 1 && widths.len() == points.len() {
                                             // 应用笔画平滑
-                                            let final_points =
-                                                if self.drawing_state.stroke_smoothing {
-                                                    Self::apply_stroke_smoothing(&points)
-                                                } else {
-                                                    points
-                                                };
+                                            let final_points = if self.state.stroke_smoothing {
+                                                Self::apply_stroke_smoothing(&points)
+                                            } else {
+                                                points
+                                            };
 
-                                            self.drawing_state.strokes.push(DrawingStroke {
+                                            self.state.strokes.push(DrawingStroke {
                                                 points: final_points,
                                                 widths,
-                                                color: self.drawing_state.brush_color,
-                                                base_width: self.drawing_state.brush_width,
+                                                color: self.state.brush_color,
+                                                base_width: self.state.brush_width,
                                             });
                                         }
                                     }
                                 }
-                                self.drawing_state.current_stroke_times = None;
-                                self.drawing_state.stroke_start_time = None;
-                                self.drawing_state.is_drawing = false;
+                                self.state.current_stroke_times = None;
+                                self.state.stroke_start_time = None;
+                                self.state.is_drawing = false;
                             }
                         }
 
                         // 如果鼠标在画布内移动且正在绘制，也添加点（用于平滑绘制）
-                        if response.hovered() && self.drawing_state.is_drawing {
+                        if response.hovered() && self.state.is_drawing {
                             if let Some(pos) = pointer_pos {
-                                if let Some(ref mut points) = self.drawing_state.current_stroke {
-                                    if let Some(ref mut widths) =
-                                        self.drawing_state.current_stroke_widths
-                                    {
-                                        if let Some(ref mut times) =
-                                            self.drawing_state.current_stroke_times
+                                if let Some(ref mut points) = self.state.current_stroke {
+                                    if let Some(ref mut widths) = self.state.current_stroke_widths {
+                                        if let Some(ref mut times) = self.state.current_stroke_times
                                         {
                                             if points.is_empty()
                                                 || points.last().unwrap().distance(pos) > 1.0
                                             {
                                                 let current_time = if let Some(start) =
-                                                    self.drawing_state.stroke_start_time
+                                                    self.state.stroke_start_time
                                                 {
                                                     start.elapsed().as_secs_f64()
                                                 } else {
@@ -1232,8 +1694,8 @@ impl App {
                                                 times.push(current_time);
 
                                                 let width = Self::calculate_dynamic_width(
-                                                    self.drawing_state.brush_width,
-                                                    self.drawing_state.dynamic_brush_mode,
+                                                    self.state.brush_width,
+                                                    self.state.dynamic_brush_mode,
                                                     points.len() - 1,
                                                     points.len(),
                                                     speed,
@@ -1261,6 +1723,14 @@ impl App {
 
         state.queue.submit(Some(encoder.finish()));
         surface_texture.present();
+
+        // 清理已标记为删除的图片（在帧结束时安全删除）
+        self.state.images.retain(|img| !img.marked_for_deletion);
+
+        // 如果启用了FPS显示，更新FPS
+        if self.state.show_fps {
+            _ = self.state.fps_counter.update();
+        }
     }
 }
 
@@ -1274,14 +1744,14 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         // 检查是否需要退出
-        if self.should_quit {
+        if self.state.should_quit {
             println!("Quit button was pressed; exiting");
             event_loop.exit();
             return;
         }
 
         // let egui render to process the event first
-        self.state
+        self.render_state
             .as_mut()
             .unwrap()
             .egui_renderer
