@@ -506,14 +506,14 @@ impl App {
                                 .selectable_value(
                                     &mut self.state.window_mode,
                                     WindowMode::Windowed,
-                                    "窗口",
+                                    "窗口模式",
                                 )
                                 .changed()
                                 || ui
                                     .selectable_value(
                                         &mut self.state.window_mode,
                                         WindowMode::Fullscreen,
-                                        "全屏",
+                                        "全屏模式",
                                     )
                                     .changed()
                                 || ui
@@ -524,6 +524,7 @@ impl App {
                                     )
                                     .changed();
 
+                            // Store mode change detection for later processing
                             if mode_changed && self.state.window_mode != old_mode {
                                 self.state.window_mode_changed = true;
                             }
