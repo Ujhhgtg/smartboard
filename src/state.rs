@@ -1,5 +1,6 @@
 use egui::Color32;
 use egui::Pos2;
+use std::collections::HashMap;
 use std::time::Instant;
 
 // 动态画笔模式
@@ -97,7 +98,7 @@ impl FpsCounter {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_time).as_secs_f32();
 
-        if elapsed >= 0.5 {
+        if elapsed >= 0.05 {
             self.current_fps = self.frame_count as f32 / elapsed;
             self.frame_count = 0;
             self.last_time = now;
@@ -128,14 +129,13 @@ pub struct AppState {
     pub selected_object: Option<SelectedObject>,
     pub drag_start_pos: Option<Pos2>,
     pub show_size_preview: bool,
-    pub size_preview_pos: Pos2,
-    pub size_preview_size: f32,
     pub show_text_dialog: bool,
     pub new_text_content: String,
     pub show_shape_dialog: bool,
     pub show_fps: bool,          // 是否显示FPS
     pub fps_counter: FpsCounter, // FPS计数器
     pub should_quit: bool,
+    pub touch_points: HashMap<u64, Pos2>, // 多点触控点，存储触控 ID 到位置的映射
 }
 
 impl Default for AppState {
@@ -160,14 +160,13 @@ impl Default for AppState {
             selected_object: None,
             drag_start_pos: None,
             show_size_preview: false,
-            size_preview_pos: Pos2::new(50.0, 50.0),
-            size_preview_size: 5.0,
             show_fps: true,
             fps_counter: FpsCounter::new(),
             should_quit: false,
             show_text_dialog: false,
             new_text_content: String::from(""),
             show_shape_dialog: false,
+            touch_points: HashMap::new(),
         }
     }
 }

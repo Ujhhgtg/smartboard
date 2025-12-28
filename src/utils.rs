@@ -1,4 +1,4 @@
-use egui::Pos2;
+use egui::{Color32, Painter, Pos2, Stroke};
 
 pub struct AppUtils;
 
@@ -88,7 +88,7 @@ impl AppUtils {
         }
     }
 
-    // 笔画平滑算法 - 使用移动平均和曲线拟合来减少抖动并添加圆角
+    // 笔画平滑算法 - 使用移动平均和曲线拟合来减少抖动
     pub fn apply_stroke_smoothing(points: &[Pos2]) -> Vec<Pos2> {
         if points.len() < 2 {
             return points.to_vec();
@@ -120,5 +120,72 @@ impl AppUtils {
         }
 
         smoothed_points
+    }
+
+    // 计算形状的边界框（用于选择和碰撞检测）
+    pub fn calculate_shape_bounding_box(shape: &crate::state::InsertedShape) -> egui::Rect {
+        match shape.shape_type {
+            crate::state::ShapeType::Line => {
+                let end_point = Pos2::new(shape.pos.x + shape.size, shape.pos.y);
+                let min_x = shape.pos.x.min(end_point.x) - 5.0;
+                let max_x = shape.pos.x.max(end_point.x) + 5.0;
+                let min_y = shape.pos.y.min(end_point.y) - 5.0;
+                let max_y = shape.pos.y.max(end_point.y) + 5.0;
+                egui::Rect::from_min_max(
+                    Pos2::new(min_x, min_y),
+                    Pos2::new(max_x, max_y),
+                )
+            }
+            crate::state::ShapeType::Arrow => {
+                let end_point = Pos2::new(shape.pos.x + shape.size, shape.pos.y);
+                let min_x = shape.pos.x.min(end_point.x) - 5.0;
+                let max_x = shape.pos.x.max(end_point.x) + 5.0;
+                let min_y = shape.pos.y.min(end_point.y) - 15.0;
+                let max_y = shape.pos.y.max(end_point.y) + 15.0;
+                egui::Rect::from_min_max(
+                    Pos2::new(min_x, min_y),
+                    Pos2::new(max_x, max_y),
+                )
+            }
+            crate::state::ShapeType::Rectangle => egui::Rect::from_min_size(
+                shape.pos,
+                egui::vec2(shape.size, shape.size),
+            ),
+            crate::state::ShapeType::Triangle => {
+                let half_size = shape.size / 2.0;
+                let min_x = shape.pos.x - 5.0;
+                let max_x = shape.pos.x + shape.size + 5.0;
+                let min_y = shape.pos.y - 5.0;
+                let max_y = shape.pos.y + half_size + 5.0;
+                egui::Rect::from_min_max(
+                    Pos2::new(min_x, min_y),
+                    Pos2::new(max_x, max_y),
+                )
+            }
+            crate::state::ShapeType::Circle => {
+                let radius = shape.size / 2.0;
+                egui::Rect::from_min_max(
+                    Pos2::new(
+                        shape.pos.x - radius - 5.0,
+                        shape.pos.y - radius - 5.0,
+                    ),
+                    Pos2::new(
+                        shape.pos.x + radius + 5.0,
+                        shape.pos.y + radius + 5.0,
+                    ),
+                )
+            }
+        }
+    }
+
+    pub fn draw_size_preview(painter: &Painter, pos: Pos2, size: f32) -> () {
+        const SIZE_PREVIEW_BORDER_WIDTH: f32 = 2.0;
+        let radius = size / SIZE_PREVIEW_BORDER_WIDTH;
+        painter.circle_filled(pos, radius, Color32::WHITE);
+        painter.circle_stroke(
+            pos,
+            radius,
+            Stroke::new(SIZE_PREVIEW_BORDER_WIDTH, Color32::BLACK),
+        );
     }
 }
