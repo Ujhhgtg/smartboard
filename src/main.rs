@@ -1,7 +1,6 @@
 mod app;
-mod egui_tools;
-mod state;
 mod render;
+mod state;
 mod utils;
 
 use winit::event_loop::{ControlFlow, EventLoop};
