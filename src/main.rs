@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
+
 mod app;
 mod render;
 mod state;
@@ -7,11 +9,12 @@ use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
-        tinyfiledialogs::message_box_ok(
-            "Application Panic",
-            &info.to_string(),
-            tinyfiledialogs::MessageBoxIcon::Error,
-        );
+        rfd::MessageDialog::new()
+            .set_title("Application Panic")
+            .set_level(rfd::MessageLevel::Error)
+            .set_description(&info.to_string())
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
     }));
 
     #[cfg(not(target_arch = "wasm32"))]

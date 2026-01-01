@@ -25,24 +25,22 @@ impl RenderState {
         width: u32,
         height: u32,
     ) -> Self {
-        let power_pref = wgpu::PowerPreference::default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: power_pref,
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             })
             .await
             .expect("Failed to find an appropriate adapter");
 
-        let features = wgpu::Features::empty();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: features,
-                required_limits: Default::default(),
-                memory_hints: Default::default(),
-                trace: Default::default(),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
                 experimental_features: ExperimentalFeatures::default(),
             })
             .await
@@ -63,7 +61,7 @@ impl RenderState {
             height,
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 0,
-            alpha_mode: swapchain_capabilities.alpha_modes[0],
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
         };
 
@@ -239,7 +237,7 @@ impl EguiRenderer {
         screen_descriptor: ScreenDescriptor,
     ) {
         if !self.frame_started {
-            panic!("begin_frame must be called before end_frame_and_draw can be called!");
+            panic!("begin_frame must be called before end_frame_and_draw can be called");
         }
 
         self.ppp(screen_descriptor.pixels_per_point);
