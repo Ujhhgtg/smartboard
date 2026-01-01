@@ -4,6 +4,7 @@ use crate::state::{
     DynamicBrushWidthMode, ResizeAnchor, ResizeOperation, RotationOperation, ThemeMode, WindowMode,
 };
 use crate::utils::AppUtils;
+use core::f32;
 use egui::{Color32, Pos2, Shape, Stroke};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu};
@@ -17,7 +18,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 pub struct App {
-    instance: wgpu::Instance,
+    gpu_instance: wgpu::Instance,
     render_state: Option<RenderState>,
     window: Option<Arc<Window>>,
     state: AppState,
@@ -25,12 +26,17 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let instance = egui_wgpu::wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let gpu_instance = egui_wgpu::wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+
+        let mut state = AppState::default();
+        if !state.persistent.show_welcome_window_on_start {
+            state.show_welcome_window = false
+        }
         Self {
-            instance,
+            gpu_instance,
             render_state: None,
             window: None,
-            state: AppState::default(),
+            state,
         }
     }
 
@@ -49,12 +55,12 @@ impl App {
         let initial_height = size.height;
 
         let surface = self
-            .instance
+            .gpu_instance
             .create_surface(window.clone())
-            .expect("Failed to create surface!");
+            .expect("Failed to create surface");
 
         let state = RenderState::new(
-            &self.instance,
+            &self.gpu_instance,
             surface,
             &window,
             initial_width,
@@ -66,8 +72,15 @@ impl App {
         self.render_state.get_or_insert(state);
     }
 
+    fn exit(&self, event_loop: &ActiveEventLoop) {
+        if let Err(err) = self.state.persistent.save_to_file() {
+            eprintln!("Failed to save settings: {}", err)
+        }
+        event_loop.exit();
+    }
+
     fn apply_window_mode(&self, window: &Arc<Window>) {
-        match self.state.window_mode {
+        match self.state.persistent.window_mode {
             WindowMode::Windowed => {
                 // 窗口模式
                 window.set_fullscreen(None);
@@ -76,15 +89,15 @@ impl App {
                 // 全屏模式
                 if let Some(monitor) = window.current_monitor() {
                     // 使用选中的视频模式，如果没有选中则使用第一个可用的
-                    if let Some(selected_index) = self.state.selected_video_mode_index {
-                        if selected_index < self.state.available_video_modes.len() {
-                            if let Some(mode) = self.state.available_video_modes.get(selected_index)
-                            {
-                                window.set_fullscreen(Some(Fullscreen::Exclusive(mode.clone())));
-                                return;
-                            }
-                        }
-                    }
+                    // if let Some(selected_index) = self.state.selected_video_mode_index {
+                    //     if selected_index < self.state.available_video_modes.len() {
+                    //         if let Some(mode) = self.state.available_video_modes.get(selected_index)
+                    //         {
+                    //             window.set_fullscreen(Some(Fullscreen::Exclusive(mode.clone())));
+                    //             return;
+                    //         }
+                    //     }
+                    // }
 
                     // 回退到第一个可用的视频模式
                     let video_mode = monitor.video_modes().next();
@@ -168,7 +181,7 @@ impl App {
         let ctx = state.egui_renderer.context();
 
         // 应用主题设置
-        match self.state.theme_mode {
+        match self.state.persistent.theme_mode {
             ThemeMode::System => {
                 // 跟随系统
                 ctx.set_visuals(egui::Visuals::default());
@@ -184,19 +197,62 @@ impl App {
         }
 
         // 更新可用的视频模式
-        let window_ref = self.window.as_ref().unwrap();
-        if let Some(monitor) = window_ref.current_monitor() {
-            self.state.available_video_modes = monitor.video_modes().collect();
+        // let window_ref = self.window.as_ref().unwrap();
+        // if let Some(monitor) = window_ref.current_monitor() {
+        //     self.state.available_video_modes = monitor.video_modes().collect();
 
-            // 如果没有选中的视频模式，默认选择第一个
-            if self.state.selected_video_mode_index.is_none()
-                && !self.state.available_video_modes.is_empty()
-            {
-                self.state.selected_video_mode_index = Some(0);
-            }
+        //     // 如果没有选中的视频模式，默认选择第一个
+        //     if self.state.selected_video_mode_index.is_none()
+        //         && !self.state.available_video_modes.is_empty()
+        //     {
+        //         self.state.selected_video_mode_index = Some(0);
+        //     }
+        // }
+
+        if !self.state.startup_animation.is_finished() {
+            self.state.startup_animation.update(ctx);
+            self.state.startup_animation.draw_fullscreen(ctx);
+            ctx.request_repaint(); // ensure smooth playback
+        }
+
+        // 欢迎窗口
+        if self.state.show_welcome_window {
+            let content_rect = ctx.available_rect();
+            let center_pos = content_rect.center();
+
+            egui::Window::new("欢迎")
+                .resizable(false)
+                .collapsible(false)
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos([center_pos.x, center_pos.y])
+                .enabled(self.state.startup_animation.is_finished())
+                .show(ctx, |ui| {
+                    ui.heading("欢迎使用 SmartBoard");
+                    ui.separator();
+
+                    ui.label("这是一个功能强大的数字画板应用程序，您可以：");
+                    ui.label("• 绘制和涂鸦");
+                    ui.label("• 插入图片、文本和形状");
+                    ui.label("• 使用各种工具进行编辑");
+                    ui.label("• 自定义画板设置");
+
+                    ui.separator();
+
+                    if ui.button("新建画布").clicked() {
+                        self.state.show_welcome_window = false;
+                    }
+
+                    ui.separator();
+
+                    ui.checkbox(
+                        &mut self.state.persistent.show_welcome_window_on_start,
+                        "启动时显示欢迎",
+                    );
+                });
         }
 
         // 工具栏窗口
+        // if !self.state.show_welcome_window {
         let content_rect = ctx.available_rect();
         let margin = 20.0; // 底部边距
 
@@ -204,6 +260,7 @@ impl App {
             .resizable(false)
             .pivot(egui::Align2::CENTER_BOTTOM)
             .default_pos([content_rect.center().x, content_rect.max.y - margin])
+            .enabled(!self.state.show_welcome_window && self.state.startup_animation.is_finished())
             .show(ctx, |ui| {
                 // 工具选择
                 ui.horizontal(|ui| {
@@ -289,7 +346,7 @@ impl App {
                     // 颜色快捷按钮
                     ui.horizontal(|ui| {
                         ui.label("快捷颜色:");
-                        for color in &self.state.quick_colors {
+                        for color in &self.state.persistent.quick_colors {
                             let color_name = if color.r() == 255 && color.g() == 0 && color.b() == 0
                             {
                                 "红"
@@ -343,32 +400,6 @@ impl App {
                         if ui.button("大").clicked() {
                             self.state.brush_width = 5.0;
                         }
-                    });
-
-                    ui.separator();
-
-                    ui.horizontal(|ui| {
-                        ui.label("动态画笔宽度微调:");
-                        ui.selectable_value(
-                            &mut self.state.dynamic_brush_width_mode,
-                            DynamicBrushWidthMode::Disabled,
-                            "禁用",
-                        );
-                        ui.selectable_value(
-                            &mut self.state.dynamic_brush_width_mode,
-                            DynamicBrushWidthMode::BrushTip,
-                            "模拟笔锋",
-                        );
-                        ui.selectable_value(
-                            &mut self.state.dynamic_brush_width_mode,
-                            DynamicBrushWidthMode::SpeedBased,
-                            "基于速度",
-                        );
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("笔迹平滑:");
-                        ui.checkbox(&mut self.state.stroke_smoothing, "启用");
                     });
                 }
 
@@ -517,7 +548,7 @@ impl App {
                                             },
                                         ));
                                         self.state.show_shape_dialog =
-                                            self.state.keep_insertion_window_open;
+                                            self.state.persistent.keep_insertion_window_open;
                                     }
 
                                     if ui.button("箭头").clicked() {
@@ -531,7 +562,7 @@ impl App {
                                             },
                                         ));
                                         self.state.show_shape_dialog =
-                                            self.state.keep_insertion_window_open;
+                                            self.state.persistent.keep_insertion_window_open;
                                     }
 
                                     if ui.button("矩形").clicked() {
@@ -545,7 +576,7 @@ impl App {
                                             },
                                         ));
                                         self.state.show_shape_dialog =
-                                            self.state.keep_insertion_window_open;
+                                            self.state.persistent.keep_insertion_window_open;
                                     }
                                     if ui.button("三角形").clicked() {
                                         self.state.canvas_objects.push(CanvasObject::Shape(
@@ -558,7 +589,7 @@ impl App {
                                             },
                                         ));
                                         self.state.show_shape_dialog =
-                                            self.state.keep_insertion_window_open;
+                                            self.state.persistent.keep_insertion_window_open;
                                     }
 
                                     if ui.button("圆形").clicked() {
@@ -572,7 +603,7 @@ impl App {
                                             },
                                         ));
                                         self.state.show_shape_dialog =
-                                            self.state.keep_insertion_window_open;
+                                            self.state.persistent.keep_insertion_window_open;
                                     }
                                 });
 
@@ -581,7 +612,7 @@ impl App {
                                         self.state.show_shape_dialog = false;
                                     }
                                     ui.checkbox(
-                                        &mut self.state.keep_insertion_window_open,
+                                        &mut self.state.persistent.keep_insertion_window_open,
                                         "保持窗口开启",
                                     );
                                 });
@@ -594,7 +625,7 @@ impl App {
                     ui.collapsing("外观", |ui| {
                         ui.horizontal(|ui| {
                             ui.label("背景颜色:");
-                            ui.color_edit_button_srgba(&mut self.state.background_color);
+                            ui.color_edit_button_srgba(&mut self.state.persistent.background_color);
                         });
 
                         ui.separator();
@@ -602,28 +633,59 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label("主题模式:");
                             ui.selectable_value(
-                                &mut self.state.theme_mode,
+                                &mut self.state.persistent.theme_mode,
                                 ThemeMode::System,
                                 "跟随系统",
                             );
                             ui.selectable_value(
-                                &mut self.state.theme_mode,
+                                &mut self.state.persistent.theme_mode,
                                 ThemeMode::Light,
                                 "浅色模式",
                             );
                             ui.selectable_value(
-                                &mut self.state.theme_mode,
+                                &mut self.state.persistent.theme_mode,
                                 ThemeMode::Dark,
                                 "深色模式",
                             );
                         });
+
+                        ui.separator();
+
+                        ui.checkbox(
+                            &mut self.state.persistent.show_welcome_window_on_start,
+                            "启动时显示欢迎",
+                        );
                     });
 
                     ui.collapsing("绘制", |ui| {
                         ui.horizontal(|ui| {
+                            ui.label("动态画笔宽度微调:");
+                            ui.selectable_value(
+                                &mut self.state.dynamic_brush_width_mode,
+                                DynamicBrushWidthMode::Disabled,
+                                "禁用",
+                            );
+                            ui.selectable_value(
+                                &mut self.state.dynamic_brush_width_mode,
+                                DynamicBrushWidthMode::BrushTip,
+                                "模拟笔锋",
+                            );
+                            ui.selectable_value(
+                                &mut self.state.dynamic_brush_width_mode,
+                                DynamicBrushWidthMode::SpeedBased,
+                                "基于速度",
+                            );
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("笔迹平滑:");
+                            ui.checkbox(&mut self.state.persistent.stroke_smoothing, "启用");
+                        });
+
+                        ui.horizontal(|ui| {
                             ui.label("插值频率:");
                             ui.add(egui::Slider::new(
-                                &mut self.state.interpolation_frequency,
+                                &mut self.state.persistent.interpolation_frequency,
                                 0.0..=1.0,
                             ));
                         });
@@ -651,7 +713,8 @@ impl App {
 
                                     // 显示当前快捷颜色列表
                                     let mut color_index_to_remove = None;
-                                    for (index, color) in self.state.quick_colors.iter().enumerate()
+                                    for (index, color) in
+                                        self.state.persistent.quick_colors.iter().enumerate()
                                     {
                                         ui.horizontal(|ui| {
                                             // 创建一个临时可变副本用于颜色编辑器
@@ -665,7 +728,7 @@ impl App {
 
                                     // 处理删除操作
                                     if let Some(index) = color_index_to_remove {
-                                        self.state.quick_colors.remove(index);
+                                        self.state.persistent.quick_colors.remove(index);
                                     }
 
                                     ui.separator();
@@ -676,6 +739,7 @@ impl App {
                                         ui.color_edit_button_srgba(&mut self.state.new_quick_color);
                                         if ui.button("添加").clicked() {
                                             self.state
+                                                .persistent
                                                 .quick_colors
                                                 .push(self.state.new_quick_color);
                                             self.state.new_quick_color = Color32::WHITE;
@@ -691,7 +755,7 @@ impl App {
                                         if ui.button("重置").clicked() {
                                             self.state.show_quick_color_editor = false;
                                             // 重置为默认颜色
-                                            self.state.quick_colors = vec![
+                                            self.state.persistent.quick_colors = vec![
                                                 Color32::from_rgb(255, 0, 0),   // 红色
                                                 Color32::from_rgb(255, 255, 0), // 黄色
                                                 Color32::from_rgb(0, 255, 0),   // 绿色
@@ -705,98 +769,98 @@ impl App {
                     ui.collapsing("性能", |ui| {
                         ui.horizontal(|ui| {
                             ui.label("窗口模式:");
-                            let old_mode = self.state.window_mode;
+                            let old_mode = self.state.persistent.window_mode;
                             let mode_changed = ui
                                 .selectable_value(
-                                    &mut self.state.window_mode,
+                                    &mut self.state.persistent.window_mode,
                                     WindowMode::Windowed,
                                     "窗口化",
                                 )
                                 .changed()
                                 || ui
                                     .selectable_value(
-                                        &mut self.state.window_mode,
+                                        &mut self.state.persistent.window_mode,
                                         WindowMode::Fullscreen,
                                         "全屏",
                                     )
                                     .changed()
                                 || ui
                                     .selectable_value(
-                                        &mut self.state.window_mode,
+                                        &mut self.state.persistent.window_mode,
                                         WindowMode::BorderlessFullscreen,
                                         "无边框全屏",
                                     )
                                     .changed();
 
-                            if mode_changed && self.state.window_mode != old_mode {
+                            if mode_changed && self.state.persistent.window_mode != old_mode {
                                 self.state.window_mode_changed = true;
                             }
                         });
 
                         // 显示模式选择（仅在全屏模式下可用）
-                        ui.horizontal(|ui| {
-                            ui.label("显示模式:");
+                        // ui.horizontal(|ui| {
+                        //     ui.label("显示模式:");
 
-                            // 创建一个可变引用用于选择
-                            let mut current_selection: usize =
-                                self.state.selected_video_mode_index.unwrap_or(0);
+                        //     // 创建一个可变引用用于选择
+                        //     let mut current_selection: usize =
+                        //         self.state.selected_video_mode_index.unwrap_or(0);
 
-                            // 显示当前选择的视频模式
-                            // if self.state.window_mode == WindowMode::Fullscreen {
-                            let video_modes = self.state.available_video_modes.clone();
+                        //     // 显示当前选择的视频模式
+                        //     // if self.state.persistent_state.window_mode == WindowMode::Fullscreen {
+                        //     let video_modes = self.state.available_video_modes.clone();
 
-                            if let Some(mode) = video_modes.get(current_selection) {
-                                let mode_text = format!(
-                                    "{}x{} @ {}Hz",
-                                    mode.size().width,
-                                    mode.size().height,
-                                    mode.refresh_rate_millihertz() as f32 / 1000.0
-                                );
-                                ui.label(mode_text);
-                            }
+                        //     if let Some(mode) = video_modes.get(current_selection) {
+                        //         let mode_text = format!(
+                        //             "{}x{} @ {}Hz",
+                        //             mode.size().width,
+                        //             mode.size().height,
+                        //             mode.refresh_rate_millihertz() as f32 / 1000.0
+                        //         );
+                        //         ui.label(mode_text);
+                        //     }
 
-                            egui::ComboBox::from_id_salt("video_mode_selection").show_ui(
-                                ui,
-                                |ui| {
-                                    // 显示所有可用的视频模式
-                                    for (index, mode) in video_modes.iter().enumerate() {
-                                        let mode_text = format!(
-                                            "{}x{} @ {}Hz",
-                                            mode.size().width,
-                                            mode.size().height,
-                                            mode.refresh_rate_millihertz() as f32 / 1000.0
-                                        );
-                                        ui.selectable_value(
-                                            &mut current_selection,
-                                            index,
-                                            mode_text,
-                                        );
-                                    }
-                                },
-                            );
-                            // } else {
-                            //     // 非全屏模式下显示当前模式但不允许更改
-                            //     if let Some(mode) =
-                            //         self.state.available_video_modes.get(current_selection)
-                            //     {
-                            //         let mode_text = format!(
-                            //             "{}x{} @ {}Hz",
-                            //             mode.size().width,
-                            //             mode.size().height,
-                            //             mode.refresh_rate_millihertz() as f32 / 1000.0
-                            //         );
-                            //         ui.label(mode_text);
-                            //     }
-                            // }
+                        //     egui::ComboBox::from_id_salt("video_mode_selection").show_ui(
+                        //         ui,
+                        //         |ui| {
+                        //             // 显示所有可用的视频模式
+                        //             for (index, mode) in video_modes.iter().enumerate() {
+                        //                 let mode_text = format!(
+                        //                     "{}x{} @ {}Hz",
+                        //                     mode.size().width,
+                        //                     mode.size().height,
+                        //                     mode.refresh_rate_millihertz() as f32 / 1000.0
+                        //                 );
+                        //                 ui.selectable_value(
+                        //                     &mut current_selection,
+                        //                     index,
+                        //                     mode_text,
+                        //                 );
+                        //             }
+                        //         },
+                        //     );
+                        //     // } else {
+                        //     //     // 非全屏模式下显示当前模式但不允许更改
+                        //     //     if let Some(mode) =
+                        //     //         self.state.available_video_modes.get(current_selection)
+                        //     //     {
+                        //     //         let mode_text = format!(
+                        //     //             "{}x{} @ {}Hz",
+                        //     //             mode.size().width,
+                        //     //             mode.size().height,
+                        //     //             mode.refresh_rate_millihertz() as f32 / 1000.0
+                        //     //         );
+                        //     //         ui.label(mode_text);
+                        //     //     }
+                        //     // }
 
-                            // 更新选择
-                            self.state.selected_video_mode_index = Some(current_selection);
+                        //     // 更新选择
+                        //     self.state.selected_video_mode_index = Some(current_selection);
 
-                            // 如果在全屏模式下更改了显示模式，立即应用更改
-                            if self.state.window_mode == WindowMode::Fullscreen {
-                                self.state.window_mode_changed = true;
-                            }
-                        });
+                        //     // 如果在全屏模式下更改了显示模式，立即应用更改
+                        //     if self.state.persistent_state.window_mode == WindowMode::Fullscreen {
+                        //         self.state.persistent_state.window_mode_changed = true;
+                        //     }
+                        // });
 
                         // 垂直同步模式选择
                         ui.horizontal(|ui| {
@@ -862,12 +926,36 @@ impl App {
 
                         ui.horizontal(|ui| {
                             ui.label("显示 FPS:");
-                            ui.checkbox(&mut self.state.show_fps, "启用");
+                            ui.checkbox(&mut self.state.persistent.show_fps, "启用");
                         });
 
                         ui.horizontal(|ui| {
                             ui.label("显示触控点:");
                             ui.checkbox(&mut self.state.show_touch_points, "启用");
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("显示终端 [仅 Windows]:");
+                            let old_show_console = self.state.show_console;
+                            if ui.checkbox(&mut self.state.show_console, "启用").changed() {
+                                #[cfg(target_os = "windows")]
+                                {
+                                    use windows::Win32::System::Console::AllocConsole;
+                                    use windows::Win32::System::Console::FreeConsole;
+
+                                    if self.state.show_console && !old_show_console {
+                                        // 启用控制台
+                                        unsafe {
+                                            let _ = AllocConsole();
+                                        }
+                                    } else if !self.state.show_console && old_show_console {
+                                        // 禁用控制台
+                                        unsafe {
+                                            let _ = FreeConsole();
+                                        }
+                                    }
+                                }
+                            }
                         });
 
                         ui.horizontal(|ui| {
@@ -918,7 +1006,7 @@ impl App {
                     if ui.button("退出").clicked() {
                         self.state.should_quit = true;
                     }
-                    if self.state.show_fps {
+                    if self.state.persistent.show_fps {
                         ui.label(format!(
                             "FPS: {}",
                             self.state.fps_counter.current_fps.to_string()
@@ -929,13 +1017,22 @@ impl App {
 
         // 主画布区域
         egui::CentralPanel::default().show(ctx, |ui| {
+            // egui::Window::new("画布")
+            //     .resizable(false)
+            //     .title_bar(false)
+            //     .pivot(egui::Align2::LEFT_TOP)
+            //     .movable(false)
+            //     .fixed_pos(Pos2::new(0.0, 0.0))
+            //     .fixed_rect(egui::Rect::EVERYTHING)
+            //     .order(egui::Order::Background)
+            //     .show(ctx, |ui| {
             let (rect, response) =
                 ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
             let painter = ui.painter();
 
             // 绘制背景
-            painter.rect_filled(rect, 0.0, self.state.background_color);
+            painter.rect_filled(rect, 0.0, self.state.persistent.background_color);
 
             // 绘制所有对象
             for (i, object) in self.state.canvas_objects.iter().enumerate() {
@@ -998,9 +1095,9 @@ impl App {
                 );
             }
 
+            // 绘制触控点
             if self.state.show_touch_points {
                 for (id, pos) in &self.state.touch_points {
-                    // 绘制触控点
                     painter.circle_filled(
                         *pos,
                         15.0,
@@ -1789,7 +1886,7 @@ impl App {
                                     && active_stroke.widths.len() == active_stroke.points.len()
                                 {
                                     // 应用笔画平滑
-                                    let final_points = if self.state.stroke_smoothing {
+                                    let final_points = if self.state.persistent.stroke_smoothing {
                                         AppUtils::apply_stroke_smoothing(&active_stroke.points)
                                     } else {
                                         active_stroke.points
@@ -1800,7 +1897,7 @@ impl App {
                                         AppUtils::apply_point_interpolation(
                                             &final_points,
                                             &active_stroke.widths,
-                                            self.state.interpolation_frequency,
+                                            self.state.persistent.interpolation_frequency,
                                         );
 
                                     self.state.canvas_objects.push(CanvasObject::Stroke(
@@ -1887,7 +1984,7 @@ impl App {
         });
 
         // 如果启用了 FPS 显示，更新 FPS
-        if self.state.show_fps {
+        if self.state.persistent.show_fps {
             _ = self.state.fps_counter.update();
         }
 
@@ -1904,6 +2001,7 @@ impl App {
             self.apply_present_mode();
             self.state.present_mode_changed = false;
         }
+        // }
     }
 }
 
@@ -1919,7 +2017,7 @@ impl ApplicationHandler for App {
         // 检查是否需要退出
         if self.state.should_quit {
             println!("Quit button was pressed; exiting");
-            event_loop.exit();
+            self.exit(event_loop);
             return;
         }
 
@@ -1932,8 +2030,8 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::CloseRequested => {
-                println!("WIndow close button was pressed; stopping");
-                event_loop.exit();
+                println!("Window close was requested; exiting");
+                self.exit(event_loop);
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -1945,11 +2043,10 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 println!("Escape key pressed; exiting");
-                event_loop.exit();
+                self.exit(event_loop);
             }
             WindowEvent::RedrawRequested => {
                 self.handle_redraw();
-
                 self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::Resized(new_size) => {
@@ -2053,7 +2150,7 @@ impl ApplicationHandler for App {
                                     && active_stroke.widths.len() == active_stroke.points.len()
                                 {
                                     // 应用笔画平滑
-                                    let final_points = if self.state.stroke_smoothing {
+                                    let final_points = if self.state.persistent.stroke_smoothing {
                                         AppUtils::apply_stroke_smoothing(&active_stroke.points)
                                     } else {
                                         active_stroke.points
@@ -2064,7 +2161,7 @@ impl ApplicationHandler for App {
                                         AppUtils::apply_point_interpolation(
                                             &final_points,
                                             &active_stroke.widths,
-                                            self.state.interpolation_frequency,
+                                            self.state.persistent.interpolation_frequency,
                                         );
 
                                     self.state.canvas_objects.push(CanvasObject::Stroke(

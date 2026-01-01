@@ -7,10 +7,20 @@ edition = "2024"
 egui = "0.33.3"
 egui-wgpu = { version = "0.33.3", features = ["winit", "wayland"] }
 egui-winit = "0.33.3"
-wgpu = { version = "27.0.1", features = ["webgpu", "webgl"] }
+wgpu = { version = "*", features = ["webgpu", "webgl"] }
 winit = "0.30.12"
-pollster = "0.4.0"
-rfd = "0.16.0"
-image = "0.25.9"
-tinyfiledialogs = "3.9.1"
-fontdb = "0.23.0"
+pollster = "*"
+rfd = "*"
+image = "*"
+fontdb = "*"
+rodio = { version = "0.21.1", default-features = false, features = [
+    "wav",
+    "playback",
+] }
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+dirs = "*"
+ecolor = { version = "*", features = ["serde"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "*", features = ["Win32_System_Console"] }

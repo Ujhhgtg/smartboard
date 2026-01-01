@@ -1,32 +1,21 @@
 use egui::Color32;
 use egui::Pos2;
 use egui::Stroke;
+use egui::{ColorImage, Context, TextureHandle, TextureOptions};
+use rodio::OutputStreamBuilder;
+use rodio::{Decoder, OutputStream, Sink};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::time::Instant;
 use wgpu::PresentMode;
 
-// 窗口模式
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum WindowMode {
-    Windowed,             // 窗口模式
-    Fullscreen,           // 全屏模式
-    BorderlessFullscreen, // 无边框全屏
-}
-
 // 动态画笔模式
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DynamicBrushWidthMode {
     Disabled,   // 禁用
     BrushTip,   // 模拟笔锋
     SpeedBased, // 基于速度
-}
-
-// 主题模式
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ThemeMode {
-    System, // 跟随系统
-    Light,  // 浅色模式
-    Dark,   // 深色模式
 }
 
 // 工具类型
@@ -204,8 +193,7 @@ impl Draw for CanvasShape {
     }
 }
 
-// 画布对象类型
-// 画布对象数据结构
+// 画布对象
 #[derive(Clone)]
 pub enum CanvasObject {
     Stroke(CanvasStroke),
@@ -253,6 +241,88 @@ pub struct RotationOperation {
     pub start_pos: Pos2,
     pub start_angle: f32,
     pub center: Pos2,
+}
+
+// 窗口模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowMode {
+    Windowed,
+    Fullscreen,
+    BorderlessFullscreen,
+}
+
+// 主题模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemeMode {
+    System,
+    Light,
+    Dark,
+}
+
+// 应用程序设置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistentState {
+    pub stroke_smoothing: bool,
+    pub interpolation_frequency: f32,
+    pub show_fps: bool,
+    pub window_mode: WindowMode,
+    pub keep_insertion_window_open: bool,
+    pub quick_colors: Vec<Color32>,
+    pub theme_mode: ThemeMode,
+    pub background_color: Color32,
+    pub show_welcome_window_on_start: bool,
+}
+
+impl Default for PersistentState {
+    fn default() -> Self {
+        Self {
+            stroke_smoothing: true,
+            interpolation_frequency: 0.1,
+            show_fps: true,
+            window_mode: WindowMode::BorderlessFullscreen,
+            keep_insertion_window_open: true,
+            quick_colors: vec![
+                Color32::from_rgb(255, 0, 0),     // 红色
+                Color32::from_rgb(255, 255, 0),   // 黄色
+                Color32::from_rgb(0, 255, 0),     // 绿色
+                Color32::from_rgb(0, 0, 0),       // 黑色
+                Color32::from_rgb(255, 255, 255), // 白色
+            ],
+            theme_mode: ThemeMode::System,
+            background_color: Color32::from_rgb(15, 38, 30),
+            show_welcome_window_on_start: true,
+        }
+    }
+}
+
+impl PersistentState {
+    // 获取设置文件路径
+    fn get_settings_path() -> std::path::PathBuf {
+        let mut path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        path.push("smartboard");
+        std::fs::create_dir_all(&path).ok();
+        path.push("settings.json");
+        path
+    }
+
+    // 加载设置从文件
+    pub fn load_from_file() -> Self {
+        let settings_path = Self::get_settings_path();
+        if let Ok(content) = std::fs::read_to_string(settings_path) {
+            if let Ok(settings) = serde_json::from_str(&content) {
+                return settings;
+            }
+        }
+        Self::default()
+    }
+
+    // 保存设置到文件
+    pub fn save_to_file(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let settings_path = Self::get_settings_path();
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(settings_path, content)?;
+        Ok(())
+    }
 }
 
 // 绘图数据结构
@@ -341,6 +411,121 @@ pub struct ActiveStroke {
     pub start_time: Instant, // 笔画开始时间
 }
 
+pub struct StartupAnimation {
+    fps: f32,
+    start_time: Option<Instant>,
+
+    // Video
+    frames: &'static [&'static [u8]],
+    texture: Option<TextureHandle>,
+    last_frame_index: usize,
+
+    // Audio
+    _audio_stream: Option<OutputStream>,
+    _audio_sink: Option<Sink>,
+
+    finished: bool,
+}
+
+impl StartupAnimation {
+    pub fn new(fps: f32, frames: &'static [&'static [u8]], audio: &'static [u8]) -> Self {
+        Self {
+            fps,
+            start_time: None,
+            frames,
+            texture: None,
+            last_frame_index: usize::MAX,
+            _audio_stream: None,
+            _audio_sink: Some(Self::play_audio(audio)),
+            finished: false,
+        }
+    }
+
+    fn play_audio(audio: &'static [u8]) -> Sink {
+        let stream = OutputStreamBuilder::open_default_stream().expect("Failed to open stream");
+
+        let sink = Sink::connect_new(&stream.mixer());
+
+        let cursor = Cursor::new(audio);
+        let source = Decoder::new(cursor).unwrap();
+
+        sink.append(source);
+        sink.play();
+
+        // keep stream alive
+        std::mem::forget(stream);
+
+        sink
+    }
+
+    pub fn update(&mut self, ctx: &Context) {
+        if self.finished {
+            return;
+        }
+
+        let start = self.start_time.get_or_insert_with(Instant::now);
+        let elapsed = start.elapsed().as_secs_f32();
+        let frame_index = (elapsed * self.fps) as usize;
+
+        if frame_index >= self.frames.len() {
+            self.finished = true;
+            return;
+        }
+
+        if frame_index == self.last_frame_index {
+            return;
+        }
+
+        self.last_frame_index = frame_index;
+
+        let image = image::load_from_memory(self.frames[frame_index])
+            .expect("Invalid startup frame")
+            .to_rgba8();
+
+        let color_image = ColorImage::from_rgba_unmultiplied(
+            [image.width() as usize, image.height() as usize],
+            image.as_raw(),
+        );
+
+        match &mut self.texture {
+            Some(tex) => tex.set(color_image, TextureOptions::LINEAR),
+            None => {
+                self.texture = Some(ctx.load_texture(
+                    "startup_animation",
+                    color_image,
+                    TextureOptions::LINEAR,
+                ));
+            }
+        }
+    }
+
+    pub fn draw_fullscreen(&self, ctx: &Context) {
+        if self.finished {
+            return;
+        }
+
+        let Some(tex) = &self.texture else { return };
+
+        let rect = ctx.content_rect();
+
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("startup_animation"),
+        ));
+
+        painter.image(
+            tex.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+}
+
 // 应用程序状态
 pub struct AppState {
     pub canvas_objects: Vec<CanvasObject>,          // 所有画布对象
@@ -349,38 +534,168 @@ pub struct AppState {
     pub brush_color: Color32,                       // 画笔颜色
     pub brush_width: f32,                           // 画笔大小
     pub dynamic_brush_width_mode: DynamicBrushWidthMode, // 动态画笔大小微调
-    pub stroke_smoothing: bool,                     // 笔画平滑选项
-    pub interpolation_frequency: f32,               // 插值频率
     pub current_tool: CanvasTool,                   // 当前工具
     pub eraser_size: f32,                           // 橡皮擦大小
-    pub background_color: Color32,                  // 背景颜色
     pub selected_object: Option<usize>,             // 选中的对象索引
     pub drag_start_pos: Option<Pos2>,               //
     pub show_size_preview: bool,                    //
     pub show_text_dialog: bool,                     //
     pub new_text_content: String,                   //
     pub show_shape_dialog: bool,                    //
-    pub show_fps: bool,                             // 是否显示 FPS
     pub fps_counter: FpsCounter,                    // FPS 计数器
     pub should_quit: bool,                          //
     pub touch_points: HashMap<u64, Pos2>,           // 多点触控点，存储触控 ID 到位置的映射
-    pub window_mode: WindowMode,                    // 窗口模式
     pub window_mode_changed: bool,                  // 窗口模式是否已更改
-    pub keep_insertion_window_open: bool,           // 是否保持插入对象窗口开启
     pub resize_anchor_hovered: Option<ResizeAnchor>, // 当前悬停的调整大小锚点
     pub rotation_anchor_hovered: bool,              // 是否悬停在旋转锚点上
     pub resize_operation: Option<ResizeOperation>,  // 当前正在进行的调整大小操作
     pub rotation_operation: Option<RotationOperation>, // 当前正在进行的旋转操作
-    pub available_video_modes: Vec<winit::monitor::VideoModeHandle>, // 可用的视频模式
-    pub selected_video_mode_index: Option<usize>,   // 选中的视频模式索引
-    pub quick_colors: Vec<Color32>,                 // 快捷颜色列表
-    pub show_quick_color_editor: bool,              // 是否显示快捷颜色编辑器
-    pub new_quick_color: Color32,                   // 新快捷颜色，用于添加
-    pub show_touch_points: bool,                    // 是否显示触控点，用于调试
-    pub present_mode: PresentMode,                  // 垂直同步模式
-    pub present_mode_changed: bool,                 // 垂直同步模式是否已更改
-    pub theme_mode: ThemeMode,                      // 主题模式
+    // pub available_video_modes: Vec<winit::monitor::VideoModeHandle>, // 可用的视频模式
+    // pub selected_video_mode_index: Option<usize>,   // 选中的视频模式索引
+    pub show_quick_color_editor: bool, // 是否显示快捷颜色编辑器
+    pub new_quick_color: Color32,      // 新快捷颜色，用于添加
+    pub show_touch_points: bool,       // 是否显示触控点，用于调试
+    pub present_mode: PresentMode,     // 垂直同步模式
+    pub present_mode_changed: bool,    // 垂直同步模式是否已更改
+    pub show_console: bool,            // 是否显示控制台 [Windows]
+    pub startup_animation: StartupAnimation, // 启动动画
+    pub show_welcome_window: bool,
+    pub persistent: PersistentState,
 }
+
+// 启动动画
+const STARTUP_FRAMES: &[&[u8]] = &[
+    include_bytes!("../assets/startup_animation/frames/frame_0001.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0002.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0003.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0004.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0005.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0006.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0007.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0008.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0009.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0010.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0011.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0012.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0013.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0014.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0015.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0016.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0017.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0018.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0019.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0020.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0021.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0022.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0023.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0024.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0025.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0026.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0027.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0028.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0029.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0030.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0031.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0032.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0033.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0034.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0035.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0036.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0037.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0038.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0039.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0040.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0041.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0042.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0043.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0044.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0045.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0046.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0047.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0048.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0049.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0050.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0051.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0052.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0053.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0054.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0055.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0056.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0057.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0058.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0059.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0060.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0061.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0062.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0063.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0064.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0065.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0066.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0067.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0068.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0069.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0070.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0071.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0072.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0073.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0074.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0075.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0076.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0077.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0078.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0079.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0080.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0081.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0082.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0083.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0084.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0085.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0086.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0087.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0088.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0089.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0090.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0091.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0092.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0093.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0094.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0095.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0096.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0097.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0098.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0099.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0100.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0101.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0102.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0103.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0104.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0105.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0106.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0107.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0108.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0109.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0110.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0111.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0112.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0113.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0114.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0115.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0116.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0117.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0118.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0119.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0120.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0121.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0122.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0123.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0124.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0125.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0126.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0127.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0128.png"),
+    include_bytes!("../assets/startup_animation/frames/frame_0129.png"),
+];
+const STARTUP_AUDIO: &[u8] = include_bytes!("../assets/startup_animation/audio.wav");
 
 impl Default for AppState {
     fn default() -> Self {
@@ -391,43 +706,33 @@ impl Default for AppState {
             brush_color: Color32::WHITE,
             brush_width: 3.0,
             dynamic_brush_width_mode: DynamicBrushWidthMode::Disabled,
-            stroke_smoothing: true,
-            interpolation_frequency: 0.3,
             current_tool: CanvasTool::Brush,
             eraser_size: 10.0,
-            background_color: Color32::from_rgb(0, 50, 35),
             selected_object: None,
             drag_start_pos: None,
             show_size_preview: false,
-            show_fps: true,
             fps_counter: FpsCounter::new(),
             should_quit: false,
             show_text_dialog: false,
             new_text_content: String::from(""),
             show_shape_dialog: false,
             touch_points: HashMap::new(),
-            window_mode: WindowMode::BorderlessFullscreen,
             window_mode_changed: false,
-            keep_insertion_window_open: true,
             resize_anchor_hovered: None,
             rotation_anchor_hovered: false,
             resize_operation: None,
             rotation_operation: None,
-            available_video_modes: Vec::new(),
-            selected_video_mode_index: None,
-            quick_colors: vec![
-                Color32::from_rgb(255, 0, 0),     // 红色
-                Color32::from_rgb(255, 255, 0),   // 黄色
-                Color32::from_rgb(0, 255, 0),     // 绿色
-                Color32::from_rgb(0, 0, 0),       // 黑色
-                Color32::from_rgb(255, 255, 255), // 白色
-            ],
+            // available_video_modes: Vec::new(),
+            // selected_video_mode_index: None,
             show_quick_color_editor: false,
             new_quick_color: Color32::WHITE,
             show_touch_points: false,
             present_mode: PresentMode::AutoVsync,
             present_mode_changed: false,
-            theme_mode: ThemeMode::System,
+            show_console: false,
+            startup_animation: StartupAnimation::new(30.0, STARTUP_FRAMES, STARTUP_AUDIO),
+            show_welcome_window: true,
+            persistent: PersistentState::load_from_file(),
         }
     }
 }
