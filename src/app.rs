@@ -1,7 +1,8 @@
 use crate::render::RenderState;
 use crate::state::{
-    AppState, CanvasImage, CanvasObject, CanvasShape, CanvasShapeType, CanvasText, CanvasTool,
-    DynamicBrushWidthMode, ResizeAnchor, ResizeOperation, RotationOperation, ThemeMode, WindowMode,
+    AppState, CanvasImage, CanvasObject, CanvasShape, CanvasShapeType, CanvasState, CanvasText,
+    CanvasTool, DynamicBrushWidthMode, OptimizationPolicy, PersistentState, ResizeAnchor,
+    ResizeOperation, RotationOperation, StartupAnimation, ThemeMode, WindowMode,
 };
 use crate::utils::AppUtils;
 use core::f32;
@@ -17,6 +18,10 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
+// 启动动画
+include!(concat!(env!("OUT_DIR"), "/startup_frames.rs"));
+pub const STARTUP_AUDIO: &[u8] = include_bytes!("../assets/startup_animation/audio.wav");
+
 pub struct App {
     gpu_instance: wgpu::Instance,
     render_state: Option<RenderState>,
@@ -26,12 +31,19 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let gpu_instance = egui_wgpu::wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let gpu_instance = egui_wgpu::wgpu::Instance::default();
 
         let mut state = AppState::default();
+
+        // init
         if !state.persistent.show_welcome_window_on_start {
             state.show_welcome_window = false
         }
+        if state.persistent.show_startup_animation {
+            state.startup_animation =
+                Some(StartupAnimation::new(30.0, STARTUP_FRAMES, STARTUP_AUDIO));
+        }
+
         Self {
             gpu_instance,
             render_state: None,
@@ -65,6 +77,7 @@ impl App {
             &window,
             initial_width,
             initial_height,
+            self.state.persistent.optimization_policy,
         )
         .await;
 
@@ -116,7 +129,7 @@ impl App {
     }
 
     fn apply_present_mode(&mut self) {
-        let wgpu_present_mode = self.state.present_mode;
+        let wgpu_present_mode = self.state.persistent.present_mode;
 
         if let Some(render_state) = self.render_state.as_mut() {
             render_state.set_present_mode(wgpu_present_mode);
@@ -142,15 +155,18 @@ impl App {
             }
         }
 
-        let state = self.render_state.as_mut().unwrap();
+        let render_state = self.render_state.as_mut().unwrap();
 
         let screen_descriptor = ScreenDescriptor {
-            size_in_pixels: [state.surface_config.width, state.surface_config.height],
+            size_in_pixels: [
+                render_state.surface_config.width,
+                render_state.surface_config.height,
+            ],
             pixels_per_point: self.window.as_ref().unwrap().scale_factor() as f32
-                * state.scale_factor,
+                * render_state.scale_factor,
         };
 
-        let surface_texture = state.surface.get_current_texture();
+        let surface_texture = render_state.surface.get_current_texture();
 
         match surface_texture {
             Err(SurfaceError::Outdated) => {
@@ -171,28 +187,34 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = state
+        let mut encoder = render_state
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         let window = self.window.as_ref().unwrap();
 
-        state.egui_renderer.begin_frame(window);
-        let ctx = state.egui_renderer.context();
+        render_state.egui_renderer.begin_frame(window);
+        let ctx = render_state.egui_renderer.context();
 
         // 应用主题设置
         match self.state.persistent.theme_mode {
             ThemeMode::System => {
-                // 跟随系统
-                ctx.set_visuals(egui::Visuals::default());
+                ctx.set_visuals(egui::Visuals {
+                    panel_fill: self.state.persistent.background_color,
+                    ..Default::default()
+                });
             }
             ThemeMode::Light => {
-                // 浅色模式
-                ctx.set_visuals(egui::Visuals::light());
+                ctx.set_visuals(egui::Visuals {
+                    panel_fill: self.state.persistent.background_color,
+                    ..egui::Visuals::light()
+                });
             }
             ThemeMode::Dark => {
-                // 深色模式
-                ctx.set_visuals(egui::Visuals::dark());
+                ctx.set_visuals(egui::Visuals {
+                    panel_fill: self.state.persistent.background_color,
+                    ..egui::Visuals::dark()
+                });
             }
         }
 
@@ -209,11 +231,15 @@ impl App {
         //     }
         // }
 
-        if !self.state.startup_animation.is_finished() {
-            self.state.startup_animation.update(ctx);
-            self.state.startup_animation.draw_fullscreen(ctx);
-            ctx.request_repaint(); // ensure smooth playback
+        if let Some(anim) = &mut self.state.startup_animation {
+            if !anim.is_finished() {
+                anim.update(ctx);
+                anim.draw_fullscreen(ctx);
+                ctx.request_repaint(); // ensure smooth playback
+            }
         }
+
+        self.state.toasts.show(ctx);
 
         // 欢迎窗口
         if self.state.show_welcome_window {
@@ -223,23 +249,38 @@ impl App {
             egui::Window::new("欢迎")
                 .resizable(false)
                 .collapsible(false)
+                .movable(false)
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos([center_pos.x, center_pos.y])
-                .enabled(self.state.startup_animation.is_finished())
+                .order(egui::Order::Foreground)
+                .enabled(if let Some(anim) = &self.state.startup_animation {
+                    anim.is_finished()
+                } else {
+                    true
+                })
                 .show(ctx, |ui| {
-                    ui.heading("欢迎使用 SmartBoard");
+                    ui.heading("欢迎使用 smartboard");
                     ui.separator();
 
                     ui.label("这是一个功能强大的数字画板应用程序，您可以：");
                     ui.label("• 绘制和涂鸦");
-                    ui.label("• 插入图片、文本和形状");
                     ui.label("• 使用各种工具进行编辑");
+                    ui.label("• 插入图片、文本和形状");
                     ui.label("• 自定义画板设置");
-
                     ui.separator();
 
                     if ui.button("新建画布").clicked() {
                         self.state.show_welcome_window = false;
+                    }
+                    if ui.button("加载画布").clicked() {
+                        match CanvasState::load_from_file_with_dialog() {
+                            Ok(canvas) => {
+                                self.state.canvas = canvas;
+                                self.state.show_welcome_window = false;
+                                self.state.toasts.success("成功加载画布!")
+                            }
+                            Err(err) => self.state.toasts.error(format!("画布加载失败: {}!", err)),
+                        };
                     }
 
                     ui.separator();
@@ -260,7 +301,14 @@ impl App {
             .resizable(false)
             .pivot(egui::Align2::CENTER_BOTTOM)
             .default_pos([content_rect.center().x, content_rect.max.y - margin])
-            .enabled(!self.state.show_welcome_window && self.state.startup_animation.is_finished())
+            .enabled(
+                !self.state.show_welcome_window
+                    && if let Some(anim) = &self.state.startup_animation {
+                        anim.is_finished()
+                    } else {
+                        true
+                    },
+            )
             .show(ctx, |ui| {
                 // 工具选择
                 ui.horizontal(|ui| {
@@ -328,7 +376,7 @@ impl App {
                                 for (_touch_id, active_stroke) in self.state.active_strokes.drain()
                                 {
                                     if active_stroke.points.len() > 1 {
-                                        self.state.canvas_objects.push(CanvasObject::Stroke(
+                                        self.state.canvas.objects.push(CanvasObject::Stroke(
                                             crate::state::CanvasStroke {
                                                 points: active_stroke.points,
                                                 widths: active_stroke.widths,
@@ -408,22 +456,22 @@ impl App {
                     || self.state.current_tool == CanvasTool::PixelEraser
                 {
                     ui.horizontal(|ui| {
-                        ui.label("橡皮擦大小:");
+                        ui.label("大小:");
                         let slider_response =
                             ui.add(egui::Slider::new(&mut self.state.eraser_size, 5.0..=50.0));
-
-                        ui.separator();
 
                         // 显示大小预览
                         if slider_response.dragged() || slider_response.hovered() {
                             self.state.show_size_preview = true;
-                            // 使用屏幕中心位置
                         } else if !slider_response.dragged() && !slider_response.hovered() {
                             self.state.show_size_preview = false;
                         }
+                    });
 
-                        if ui.button("清空画布").clicked() {
-                            self.state.canvas_objects.clear();
+                    ui.horizontal(|ui| {
+                        ui.label("清空:");
+                        if ui.button("OK").clicked() {
+                            self.state.canvas.objects.clear();
                             self.state.active_strokes.clear();
                             self.state.is_drawing = false;
                             self.state.selected_object = None;
@@ -465,9 +513,9 @@ impl App {
                                         egui::TextureOptions::LINEAR,
                                     );
 
-                                    self.state.canvas_objects.push(CanvasObject::Image(
+                                    self.state.canvas.objects.push(CanvasObject::Image(
                                         CanvasImage {
-                                            texture,
+                                            texture_id: texture.id(),
                                             pos: Pos2::new(100.0, 100.0),
                                             size: egui::vec2(target_width, target_height),
                                             aspect_ratio,
@@ -503,7 +551,7 @@ impl App {
 
                                 ui.horizontal(|ui| {
                                     if ui.button("确认").clicked() {
-                                        self.state.canvas_objects.push(CanvasObject::Text(
+                                        self.state.canvas.objects.push(CanvasObject::Text(
                                             CanvasText {
                                                 text: self.state.new_text_content.clone(),
                                                 pos: Pos2::new(100.0, 100.0),
@@ -538,7 +586,7 @@ impl App {
 
                                 ui.horizontal(|ui| {
                                     if ui.button("线").clicked() {
-                                        self.state.canvas_objects.push(CanvasObject::Shape(
+                                        self.state.canvas.objects.push(CanvasObject::Shape(
                                             CanvasShape {
                                                 shape_type: CanvasShapeType::Line,
                                                 pos: Pos2::new(100.0, 100.0),
@@ -552,7 +600,7 @@ impl App {
                                     }
 
                                     if ui.button("箭头").clicked() {
-                                        self.state.canvas_objects.push(CanvasObject::Shape(
+                                        self.state.canvas.objects.push(CanvasObject::Shape(
                                             CanvasShape {
                                                 shape_type: CanvasShapeType::Arrow,
                                                 pos: Pos2::new(100.0, 100.0),
@@ -566,7 +614,7 @@ impl App {
                                     }
 
                                     if ui.button("矩形").clicked() {
-                                        self.state.canvas_objects.push(CanvasObject::Shape(
+                                        self.state.canvas.objects.push(CanvasObject::Shape(
                                             CanvasShape {
                                                 shape_type: CanvasShapeType::Rectangle,
                                                 pos: Pos2::new(100.0, 100.0),
@@ -579,7 +627,7 @@ impl App {
                                             self.state.persistent.keep_insertion_window_open;
                                     }
                                     if ui.button("三角形").clicked() {
-                                        self.state.canvas_objects.push(CanvasObject::Shape(
+                                        self.state.canvas.objects.push(CanvasObject::Shape(
                                             CanvasShape {
                                                 shape_type: CanvasShapeType::Triangle,
                                                 pos: Pos2::new(100.0, 100.0),
@@ -593,7 +641,7 @@ impl App {
                                     }
 
                                     if ui.button("圆形").clicked() {
-                                        self.state.canvas_objects.push(CanvasObject::Shape(
+                                        self.state.canvas.objects.push(CanvasObject::Shape(
                                             CanvasShape {
                                                 shape_type: CanvasShapeType::Circle,
                                                 pos: Pos2::new(100.0, 100.0),
@@ -628,8 +676,6 @@ impl App {
                             ui.color_edit_button_srgba(&mut self.state.persistent.background_color);
                         });
 
-                        ui.separator();
-
                         ui.horizontal(|ui| {
                             ui.label("主题模式:");
                             ui.selectable_value(
@@ -649,15 +695,47 @@ impl App {
                             );
                         });
 
-                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("启动时显示欢迎:");
+                            ui.checkbox(
+                                &mut self.state.persistent.show_welcome_window_on_start,
+                                "",
+                            );
+                        });
 
-                        ui.checkbox(
-                            &mut self.state.persistent.show_welcome_window_on_start,
-                            "启动时显示欢迎",
-                        );
+                        ui.horizontal(|ui| {
+                            ui.label("显示启动动画:");
+                            ui.checkbox(&mut self.state.persistent.show_startup_animation, "");
+                        });
                     });
 
                     ui.collapsing("绘制", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("画布持久化:");
+                            if ui.button("加载").clicked() {
+                                match CanvasState::load_from_file_with_dialog() {
+                                    Ok(canvas) => {
+                                        self.state.canvas = canvas;
+                                        self.state.show_welcome_window = false;
+                                        self.state.toasts.success("成功加载画布!");
+                                    }
+                                    Err(err) => {
+                                        self.state.toasts.error(format!("画布加载失败: {}!", err));
+                                    }
+                                };
+                            }
+                            if ui.button("保存").clicked() {
+                                match self.state.canvas.save_to_file_with_dialog() {
+                                    Ok(_) => {
+                                        self.state.toasts.success("成功保存画布!");
+                                    }
+                                    Err(err) => {
+                                        self.state.toasts.error(format!("画布保存失败: {}!", err));
+                                    }
+                                }
+                            }
+                        });
+
                         ui.horizontal(|ui| {
                             ui.label("动态画笔宽度微调:");
                             ui.selectable_value(
@@ -679,7 +757,7 @@ impl App {
 
                         ui.horizontal(|ui| {
                             ui.label("笔迹平滑:");
-                            ui.checkbox(&mut self.state.persistent.stroke_smoothing, "启用");
+                            ui.checkbox(&mut self.state.persistent.stroke_smoothing, "");
                         });
 
                         ui.horizontal(|ui| {
@@ -691,8 +769,8 @@ impl App {
                         });
 
                         ui.horizontal(|ui| {
-                            ui.label("快捷颜色管理:");
-                            if ui.button("编辑快捷颜色").clicked() {
+                            ui.label("编辑快捷颜色:");
+                            if ui.button("OK").clicked() {
                                 self.state.show_quick_color_editor = true;
                             }
                         });
@@ -705,6 +783,7 @@ impl App {
                             egui::Window::new("编辑快捷颜色")
                                 .collapsible(false)
                                 .resizable(false)
+                                .movable(false)
                                 .pivot(egui::Align2::CENTER_CENTER)
                                 .default_pos([center_pos.x, center_pos.y])
                                 .show(ctx, |ui| {
@@ -865,10 +944,10 @@ impl App {
                         // 垂直同步模式选择
                         ui.horizontal(|ui| {
                             ui.label("垂直同步:");
-                            let old_present_mode = self.state.present_mode;
+                            let old_present_mode = self.state.persistent.present_mode;
                             let present_mode_changed = ui
                                 .selectable_value(
-                                    &mut self.state.present_mode,
+                                    &mut self.state.persistent.present_mode,
                                     // TODO: bro wtf can you imagine that i have to modify wgpu & egui's source code to fix their weird & incomplete & inconsistent rename of AutoVsync to AAutoVsync
                                     PresentMode::AutoVsync,
                                     "开 (自动) | AutoVsync",
@@ -876,43 +955,59 @@ impl App {
                                 .changed()
                                 || ui
                                     .selectable_value(
-                                        &mut self.state.present_mode,
+                                        &mut self.state.persistent.present_mode,
                                         PresentMode::AutoNoVsync,
                                         "关 (自动) | AutoNoVsync",
                                     )
                                     .changed()
                                 || ui
                                     .selectable_value(
-                                        &mut self.state.present_mode,
+                                        &mut self.state.persistent.present_mode,
                                         PresentMode::Fifo,
                                         "开 | Fifo",
                                     )
                                     .changed()
                                 || ui
                                     .selectable_value(
-                                        &mut self.state.present_mode,
+                                        &mut self.state.persistent.present_mode,
                                         PresentMode::FifoRelaxed,
                                         "自适应 | FifoRelaxed",
                                     )
                                     .changed()
                                 || ui
                                     .selectable_value(
-                                        &mut self.state.present_mode,
+                                        &mut self.state.persistent.present_mode,
                                         PresentMode::Immediate,
                                         "关 | Immediate",
                                     )
                                     .changed()
                                 || ui
                                     .selectable_value(
-                                        &mut self.state.present_mode,
+                                        &mut self.state.persistent.present_mode,
                                         PresentMode::Mailbox,
                                         "开 (快速) | Mailbox",
                                     )
                                     .changed();
 
-                            if present_mode_changed && self.state.present_mode != old_present_mode {
+                            if present_mode_changed
+                                && self.state.persistent.present_mode != old_present_mode
+                            {
                                 self.state.present_mode_changed = true;
                             }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("优化策略 [需重启以应用]:");
+                            ui.selectable_value(
+                                &mut self.state.persistent.optimization_policy,
+                                OptimizationPolicy::Performance,
+                                "性能",
+                            );
+                            ui.selectable_value(
+                                &mut self.state.persistent.optimization_policy,
+                                OptimizationPolicy::ResourceUsage,
+                                "资源用量",
+                            );
                         });
                     });
 
@@ -926,18 +1021,18 @@ impl App {
 
                         ui.horizontal(|ui| {
                             ui.label("显示 FPS:");
-                            ui.checkbox(&mut self.state.persistent.show_fps, "启用");
+                            ui.checkbox(&mut self.state.persistent.show_fps, "");
                         });
 
                         ui.horizontal(|ui| {
                             ui.label("显示触控点:");
-                            ui.checkbox(&mut self.state.show_touch_points, "启用");
+                            ui.checkbox(&mut self.state.show_touch_points, "");
                         });
 
                         ui.horizontal(|ui| {
                             ui.label("显示终端 [仅 Windows]:");
                             let old_show_console = self.state.show_console;
-                            if ui.checkbox(&mut self.state.show_console, "启用").changed() {
+                            if ui.checkbox(&mut self.state.show_console, "").changed() {
                                 #[cfg(target_os = "windows")]
                                 {
                                     use windows::Win32::System::Console::AllocConsole;
@@ -993,8 +1088,24 @@ impl App {
                                         base_width: stress_width,
                                     };
 
-                                    self.state.canvas_objects.push(CanvasObject::Stroke(stroke));
+                                    self.state.canvas.objects.push(CanvasObject::Stroke(stroke));
                                 }
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("保存设置:");
+                            if ui.button("OK").clicked() {
+                                if let Err(err) = self.state.persistent.save_to_file() {
+                                    self.state.toasts.error(format!("设置保存失败: {}!", err));
+                                }
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("重置设置:");
+                            if ui.button("OK").clicked() {
+                                self.state.persistent = PersistentState::default();
                             }
                         });
                     });
@@ -1019,11 +1130,12 @@ impl App {
         egui::CentralPanel::default().show(ctx, |ui| {
             // egui::Window::new("画布")
             //     .resizable(false)
+            //     .movable(false)
             //     .title_bar(false)
             //     .pivot(egui::Align2::LEFT_TOP)
             //     .movable(false)
             //     .fixed_pos(Pos2::new(0.0, 0.0))
-            //     .fixed_rect(egui::Rect::EVERYTHING)
+            //     .fixed_rect(content_rect)
             //     .order(egui::Order::Background)
             //     .show(ctx, |ui| {
             let (rect, response) =
@@ -1035,7 +1147,7 @@ impl App {
             painter.rect_filled(rect, 0.0, self.state.persistent.background_color);
 
             // 绘制所有对象
-            for (i, object) in self.state.canvas_objects.iter().enumerate() {
+            for (i, object) in self.state.canvas.objects.iter().enumerate() {
                 let selected = self.state.selected_object == Some(i);
                 object.draw(painter, selected);
             }
@@ -1131,7 +1243,7 @@ impl App {
 
             // 绘制调整大小和旋转锚点
             if let Some(selected_idx) = self.state.selected_object {
-                if let Some(object) = self.state.canvas_objects.get(selected_idx) {
+                if let Some(object) = self.state.canvas.objects.get(selected_idx) {
                     let object_rect = match object {
                         CanvasObject::Image(img) => egui::Rect::from_min_size(img.pos, img.size),
                         CanvasObject::Text(text) => {
@@ -1179,7 +1291,7 @@ impl App {
                         if let Some(selected_idx) = self.state.selected_object {
                             // 获取选中对象的边界框
                             let object_rect =
-                                if let Some(object) = self.state.canvas_objects.get(selected_idx) {
+                                if let Some(object) = self.state.canvas.objects.get(selected_idx) {
                                     match object {
                                         CanvasObject::Image(img) => {
                                             Some(egui::Rect::from_min_size(img.pos, img.size))
@@ -1248,7 +1360,7 @@ impl App {
                             self.state.drag_start_pos = Some(pos);
 
                             let mut hit = false;
-                            for object in &self.state.canvas_objects {
+                            for object in &self.state.canvas.objects {
                                 if let CanvasObject::Image(img) = object {
                                     if egui::Rect::from_min_size(img.pos, img.size).contains(pos) {
                                         hit = true;
@@ -1257,7 +1369,7 @@ impl App {
                                 }
                             }
                             if !hit {
-                                for object in &self.state.canvas_objects {
+                                for object in &self.state.canvas.objects {
                                     if let CanvasObject::Stroke(stroke) = object {
                                         if AppUtils::point_intersects_stroke(pos, stroke, 10.0) {
                                             hit = true;
@@ -1272,7 +1384,7 @@ impl App {
 
                             // 如果已经有对象被选中，检查是否点击了锚点
                             if let Some(selected_idx) = self.state.selected_object {
-                                if let Some(object) = self.state.canvas_objects.get(selected_idx) {
+                                if let Some(object) = self.state.canvas.objects.get(selected_idx) {
                                     let object_rect = match object {
                                         CanvasObject::Image(img) => {
                                             Some(egui::Rect::from_min_size(img.pos, img.size))
@@ -1313,7 +1425,7 @@ impl App {
 
                                             // 设置初始角度
                                             if let Some(CanvasObject::Shape(shape)) =
-                                                self.state.canvas_objects.get(selected_idx)
+                                                self.state.canvas.objects.get(selected_idx)
                                             {
                                                 if let Some(op) =
                                                     self.state.rotation_operation.as_mut()
@@ -1339,7 +1451,7 @@ impl App {
 
                                 // 检查所有对象
                                 for (i, object) in
-                                    self.state.canvas_objects.iter().enumerate().rev()
+                                    self.state.canvas.objects.iter().enumerate().rev()
                                 {
                                     match object {
                                         CanvasObject::Image(img) => {
@@ -1387,7 +1499,7 @@ impl App {
                         // 点击非对象区域时取消选择
                         if let Some(pos) = pointer_pos {
                             let mut hit = false;
-                            for object in &self.state.canvas_objects {
+                            for object in &self.state.canvas.objects {
                                 if let CanvasObject::Image(img) = object {
                                     if egui::Rect::from_min_size(img.pos, img.size).contains(pos) {
                                         hit = true;
@@ -1396,7 +1508,7 @@ impl App {
                                 }
                             }
                             if !hit {
-                                for object in &self.state.canvas_objects {
+                                for object in &self.state.canvas.objects {
                                     if let CanvasObject::Stroke(stroke) = object {
                                         if AppUtils::point_intersects_stroke(pos, stroke, 10.0) {
                                             hit = true;
@@ -1415,7 +1527,7 @@ impl App {
                             if let Some(resize_op) = self.state.resize_operation {
                                 if let Some(selected_idx) = self.state.selected_object {
                                     if let Some(object) =
-                                        self.state.canvas_objects.get_mut(selected_idx)
+                                        self.state.canvas.objects.get_mut(selected_idx)
                                     {
                                         let delta = pos - resize_op.start_pos;
 
@@ -1561,7 +1673,7 @@ impl App {
                             else if let Some(rotate_op) = self.state.rotation_operation {
                                 if let Some(selected_idx) = self.state.selected_object {
                                     if let Some(object) =
-                                        self.state.canvas_objects.get_mut(selected_idx)
+                                        self.state.canvas.objects.get_mut(selected_idx)
                                     {
                                         // 计算当前角度
                                         let center = rotate_op.center;
@@ -1593,7 +1705,7 @@ impl App {
                                 self.state.drag_start_pos = Some(pos);
 
                                 if let Some(object) =
-                                    self.state.canvas_objects.get_mut(selected_idx)
+                                    self.state.canvas.objects.get_mut(selected_idx)
                                 {
                                     match object {
                                         CanvasObject::Image(img) => {
@@ -1636,7 +1748,7 @@ impl App {
                             let mut to_remove = Vec::new();
 
                             // 检查所有对象
-                            for (i, object) in self.state.canvas_objects.iter().enumerate().rev() {
+                            for (i, object) in self.state.canvas.objects.iter().enumerate().rev() {
                                 match object {
                                     CanvasObject::Image(img) => {
                                         let img_rect = egui::Rect::from_min_size(img.pos, img.size);
@@ -1678,7 +1790,7 @@ impl App {
 
                             // 删除对象
                             for i in to_remove {
-                                self.state.canvas_objects.remove(i);
+                                self.state.canvas.objects.remove(i);
                             }
                         }
                     }
@@ -1700,7 +1812,7 @@ impl App {
                             // 我们需要收集所有新的笔画，因为我们可能需要将一个笔画分割为多个
                             let mut new_strokes = Vec::new();
 
-                            for object in &self.state.canvas_objects {
+                            for object in &self.state.canvas.objects {
                                 if let CanvasObject::Stroke(stroke) = object {
                                     if stroke.points.len() < 2 {
                                         continue;
@@ -1772,9 +1884,10 @@ impl App {
                             }
 
                             // 替换所有笔画
-                            self.state.canvas_objects = self
+                            self.state.canvas.objects = self
                                 .state
-                                .canvas_objects
+                                .canvas
+                                .objects
                                 .iter()
                                 .filter_map(|obj| {
                                     if let CanvasObject::Stroke(_) = obj {
@@ -1787,7 +1900,7 @@ impl App {
 
                             // 添加处理后的笔画
                             for stroke in new_strokes {
-                                self.state.canvas_objects.push(CanvasObject::Stroke(stroke));
+                                self.state.canvas.objects.push(CanvasObject::Stroke(stroke));
                             }
                         }
                     }
@@ -1825,6 +1938,7 @@ impl App {
                                         widths: vec![width],
                                         times: vec![0.0],
                                         start_time,
+                                        last_movement_time: start_time,
                                     },
                                 );
                             }
@@ -1871,6 +1985,9 @@ impl App {
                                             speed,
                                         );
                                         active_stroke.widths.push(width);
+
+                                        // 更新最后移动时间
+                                        active_stroke.last_movement_time = Instant::now();
                                     }
                                 }
                             }
@@ -1900,7 +2017,7 @@ impl App {
                                             self.state.persistent.interpolation_frequency,
                                         );
 
-                                    self.state.canvas_objects.push(CanvasObject::Stroke(
+                                    self.state.canvas.objects.push(CanvasObject::Stroke(
                                         crate::state::CanvasStroke {
                                             points: interpolated_points,
                                             widths: interpolated_widths,
@@ -1925,6 +2042,36 @@ impl App {
                                 self.state.active_strokes.get_mut(&touch_id)
                             {
                                 let current_time = active_stroke.start_time.elapsed().as_secs_f64();
+
+                                // 检查是否停留超过 0.5 秒
+                                let time_since_last_movement =
+                                    active_stroke.last_movement_time.elapsed().as_secs_f32();
+                                if time_since_last_movement > 0.5 && active_stroke.points.len() >= 2
+                                {
+                                    // 拉直笔画
+                                    let straightened_points =
+                                        AppUtils::straighten_stroke(&active_stroke.points);
+
+                                    // 只有在点数量实际改变时才更新宽度数组
+                                    if straightened_points.len() != active_stroke.points.len() {
+                                        active_stroke.points = straightened_points;
+
+                                        // 更新宽度数组以匹配新的点数量
+                                        if !active_stroke.widths.is_empty() {
+                                            let first_width = active_stroke.widths[0];
+                                            let last_width = *active_stroke.widths.last().unwrap();
+                                            active_stroke.widths =
+                                                if active_stroke.points.len() == 1 {
+                                                    vec![first_width]
+                                                } else {
+                                                    vec![first_width, last_width]
+                                                };
+                                        }
+                                    }
+
+                                    // 更新最后移动时间
+                                    active_stroke.last_movement_time = Instant::now();
+                                }
 
                                 if active_stroke.points.is_empty()
                                     || active_stroke.points.last().unwrap().distance(pos) > 1.0
@@ -1954,6 +2101,9 @@ impl App {
                                         speed,
                                     );
                                     active_stroke.widths.push(width);
+
+                                    // 更新最后移动时间
+                                    active_stroke.last_movement_time = Instant::now();
                                 }
                             }
                         }
@@ -1962,20 +2112,20 @@ impl App {
             }
         });
 
-        state.egui_renderer.end_frame_and_draw(
-            &state.device,
-            &state.queue,
+        render_state.egui_renderer.end_frame_and_draw(
+            &render_state.device,
+            &render_state.queue,
             &mut encoder,
             window,
             &surface_view,
             screen_descriptor,
         );
 
-        state.queue.submit(Some(encoder.finish()));
+        render_state.queue.submit(Some(encoder.finish()));
         surface_texture.present();
 
         // 清理已标记为删除的图片（在帧结束时安全删除）
-        self.state.canvas_objects.retain(|obj| {
+        self.state.canvas.objects.retain(|obj| {
             if let CanvasObject::Image(img) = obj {
                 !img.marked_for_deletion
             } else {
@@ -2001,7 +2151,6 @@ impl App {
             self.apply_present_mode();
             self.state.present_mode_changed = false;
         }
-        // }
     }
 }
 
@@ -2090,6 +2239,7 @@ impl ApplicationHandler for App {
                                     widths: vec![width],
                                     times: vec![0.0],
                                     start_time,
+                                    last_movement_time: start_time,
                                 },
                             );
                         }
@@ -2136,6 +2286,9 @@ impl ApplicationHandler for App {
                                         speed,
                                     );
                                     active_stroke.widths.push(width);
+
+                                    // 更新最后移动时间
+                                    active_stroke.last_movement_time = Instant::now();
                                 }
                             }
                         }
@@ -2164,7 +2317,7 @@ impl ApplicationHandler for App {
                                             self.state.persistent.interpolation_frequency,
                                         );
 
-                                    self.state.canvas_objects.push(CanvasObject::Stroke(
+                                    self.state.canvas.objects.push(CanvasObject::Stroke(
                                         crate::state::CanvasStroke {
                                             points: interpolated_points,
                                             widths: interpolated_widths,

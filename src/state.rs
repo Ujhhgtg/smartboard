@@ -2,6 +2,7 @@ use egui::Color32;
 use egui::Pos2;
 use egui::Stroke;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
+use egui_notify::Toasts;
 use rodio::OutputStreamBuilder;
 use rodio::{Decoder, OutputStream, Sink};
 use serde::{Deserialize, Serialize};
@@ -11,22 +12,24 @@ use std::time::Instant;
 use wgpu::PresentMode;
 
 // 动态画笔模式
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DynamicBrushWidthMode {
-    Disabled,   // 禁用
+    #[default]
+    Disabled, // 禁用
     BrushTip,   // 模拟笔锋
     SpeedBased, // 基于速度
 }
 
 // 工具类型
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum CanvasTool {
-    Select,       // 选择
-    Brush,        // 画笔
+    Select, // 选择
+    #[default]
+    Brush, // 画笔
     ObjectEraser, // 对象橡皮擦
-    PixelEraser,  // 像素橡皮擦
-    Insert,       // 插入
-    Settings,     // 设置
+    PixelEraser, // 像素橡皮擦
+    Insert, // 插入
+    Settings, // 设置
 }
 
 // 可绘制对象的 trait
@@ -35,9 +38,9 @@ pub trait Draw {
 }
 
 // 插入的图片数据结构
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasImage {
-    pub texture: egui::TextureHandle,
+    pub texture_id: egui::TextureId,
     pub pos: Pos2,
     pub size: egui::Vec2,
     pub aspect_ratio: f32,
@@ -48,7 +51,7 @@ impl Draw for CanvasImage {
     fn draw(&self, painter: &egui::Painter, selected: bool) {
         let img_rect = egui::Rect::from_min_size(self.pos, self.size);
         painter.image(
-            self.texture.id(),
+            self.texture_id,
             img_rect,
             egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
             Color32::WHITE,
@@ -67,7 +70,7 @@ impl Draw for CanvasImage {
 }
 
 // 插入的文本数据结构
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasText {
     pub text: String,
     pub pos: Pos2,
@@ -108,7 +111,7 @@ impl Draw for CanvasText {
 }
 
 // 插入的形状数据结构
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum CanvasShapeType {
     Line,
     Arrow,
@@ -117,7 +120,7 @@ pub enum CanvasShapeType {
     Circle,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasShape {
     pub shape_type: CanvasShapeType,
     pub pos: Pos2,
@@ -194,7 +197,7 @@ impl Draw for CanvasShape {
 }
 
 // 画布对象
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CanvasObject {
     Stroke(CanvasStroke),
     Image(CanvasImage),
@@ -243,20 +246,202 @@ pub struct RotationOperation {
     pub center: Pos2,
 }
 
+// // Toast 通知类型
+// #[derive(Clone, Copy, PartialEq, Eq)]
+// pub enum ToastType {
+//     Success,
+//     Error,
+// }
+
+// // Toast 通知
+// #[derive(Clone)]
+// pub struct Toast {
+//     pub message: String,
+//     pub toast_type: ToastType,
+//     pub start_time: Instant,
+// }
+
+// impl Toast {
+//     pub fn new(message: String, toast_type: ToastType) -> Self {
+//         Self {
+//             message,
+//             toast_type,
+//             start_time: Instant::now(),
+//         }
+//     }
+
+//     pub fn draw(&self, ctx: &Context) {
+//         // 检查 Toast 是否过期
+//         if self.is_finished() {
+//             return;
+//         }
+
+//         // 计算 Toast 位置（水平居中，垂直 70% 位置）
+//         let content_rect = ctx.available_rect();
+//         let toast_width = 300.0; // 固定宽度
+//         let toast_height = 80.0; // 固定高度
+
+//         let toast_x = content_rect.center().x - toast_width / 2.0;
+//         let toast_y = content_rect.min.y + content_rect.height() * 0.7 - toast_height / 2.0;
+
+//         let toast_rect = egui::Rect::from_min_size(
+//             egui::pos2(toast_x, toast_y),
+//             egui::vec2(toast_width, toast_height),
+//         );
+
+//         // 创建 Toast 窗口
+//         let painter = ctx.layer_painter(egui::LayerId::new(
+//             egui::Order::Foreground, // 确保 Toast 在最前面
+//             egui::Id::new("toast_notification"),
+//         ));
+
+//         // 根据 Toast 类型选择颜色
+//         let (bg_color, icon, icon_color) = match self.toast_type {
+//             ToastType::Success => (
+//                 Color32::from_rgba_unmultiplied(46, 125, 50, 230), // 深绿色
+//                 "✓",                                               // 成功图标
+//                 Color32::WHITE,
+//             ),
+//             ToastType::Error => (
+//                 Color32::from_rgba_unmultiplied(211, 47, 47, 230), // 深红色
+//                 "✗",                                               // 错误图标
+//                 Color32::WHITE,
+//             ),
+//         };
+
+//         // 绘制 Toast 背景
+//         painter.rect_filled(toast_rect, 10.0, bg_color);
+
+//         // 绘制 Toast 边框
+//         painter.rect_stroke(
+//             toast_rect,
+//             10.0,
+//             Stroke::new(2.0, Color32::from_black_alpha(100)),
+//             egui::StrokeKind::Outside,
+//         );
+
+//         // 绘制图标和文本
+//         let icon_font = egui::FontId::proportional(30.0);
+//         let text_font = egui::FontId::proportional(16.0);
+
+//         // 计算图标位置
+//         let icon_pos = egui::pos2(
+//             toast_rect.min.x + 20.0,
+//             toast_rect.center().y - 15.0, // 中心对齐图标
+//         );
+
+//         // 绘制图标
+//         let icon_galley = painter.layout_no_wrap(icon.to_string(), icon_font.clone(), icon_color);
+//         let icon_shape = egui::epaint::TextShape {
+//             pos: icon_pos,
+//             galley: icon_galley,
+//             underline: egui::Stroke::NONE,
+//             override_text_color: None,
+//             angle: 0.0,
+//             fallback_color: icon_color,
+//             opacity_factor: 1.0,
+//         };
+//         painter.add(icon_shape);
+
+//         // 计算文本位置（图标右侧）
+//         let text_start_x = icon_pos.x + 40.0; // 图标宽度 + 间距
+//         let text_pos = egui::pos2(
+//             text_start_x,
+//             toast_rect.center().y - 10.0, // 中心对齐文本
+//         );
+
+//         // 绘制文本
+//         let text_galley = painter.layout_no_wrap(self.message.clone(), text_font, Color32::WHITE);
+//         let text_shape = egui::epaint::TextShape {
+//             pos: text_pos,
+//             galley: text_galley,
+//             underline: egui::Stroke::NONE,
+//             override_text_color: None,
+//             angle: 0.0,
+//             fallback_color: Color32::WHITE,
+//             opacity_factor: 1.0,
+//         };
+//         painter.add(text_shape);
+//     }
+
+//     pub fn is_finished(&self) -> bool {
+//         self.start_time.elapsed().as_secs_f32() >= 3.0
+//     }
+// }
+
 // 窗口模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum WindowMode {
     Windowed,
     Fullscreen,
+    #[default]
     BorderlessFullscreen,
 }
 
 // 主题模式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeMode {
     System,
     Light,
+    #[default]
     Dark,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum OptimizationPolicy {
+    #[default]
+    Performance,
+    ResourceUsage,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CanvasState {
+    pub objects: Vec<CanvasObject>,
+}
+
+impl CanvasState {
+    // 加载画布从文件
+    pub fn load_from_file(path: &std::path::PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        let canvas = serde_json::from_str(&content)?;
+        Ok(canvas)
+    }
+
+    // 保存画布到文件
+    pub fn save_to_file(
+        &self,
+        path: &std::path::PathBuf,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let content = serde_json::to_string(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+
+    pub fn load_from_file_with_dialog() -> Result<Self, Box<dyn std::error::Error>> {
+        let path = rfd::FileDialog::new()
+            .add_filter("画布文件", &["json"])
+            .pick_file()
+            .ok_or(std::io::Error::new(
+                std::io::ErrorKind::InvalidFilename,
+                "Cancelled",
+            ))?;
+        let canvas = CanvasState::load_from_file(&path)?;
+        Ok(canvas)
+    }
+
+    pub fn save_to_file_with_dialog(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = rfd::FileDialog::new()
+            .add_filter("画布文件", &["json"])
+            .set_file_name("canvas.json")
+            .save_file()
+            .ok_or(std::io::Error::new(
+                std::io::ErrorKind::InvalidFilename,
+                "Cancelled",
+            ))?;
+
+        self.save_to_file(&path)?;
+        Ok(())
+    }
 }
 
 // 应用程序设置
@@ -271,6 +456,9 @@ pub struct PersistentState {
     pub theme_mode: ThemeMode,
     pub background_color: Color32,
     pub show_welcome_window_on_start: bool,
+    pub optimization_policy: OptimizationPolicy,
+    pub present_mode: PresentMode,
+    pub show_startup_animation: bool,
 }
 
 impl Default for PersistentState {
@@ -279,7 +467,7 @@ impl Default for PersistentState {
             stroke_smoothing: true,
             interpolation_frequency: 0.1,
             show_fps: true,
-            window_mode: WindowMode::BorderlessFullscreen,
+            window_mode: WindowMode::default(),
             keep_insertion_window_open: true,
             quick_colors: vec![
                 Color32::from_rgb(255, 0, 0),     // 红色
@@ -288,9 +476,12 @@ impl Default for PersistentState {
                 Color32::from_rgb(0, 0, 0),       // 黑色
                 Color32::from_rgb(255, 255, 255), // 白色
             ],
-            theme_mode: ThemeMode::System,
+            theme_mode: ThemeMode::default(),
             background_color: Color32::from_rgb(15, 38, 30),
             show_welcome_window_on_start: true,
+            optimization_policy: OptimizationPolicy::default(),
+            present_mode: PresentMode::AutoVsync,
+            show_startup_animation: true,
         }
     }
 }
@@ -326,7 +517,7 @@ impl PersistentState {
 }
 
 // 绘图数据结构
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasStroke {
     pub points: Vec<Pos2>,
     pub widths: Vec<f32>, // 每个点的宽度（用于动态画笔）
@@ -406,9 +597,10 @@ impl FpsCounter {
 // 单个正在绘制的笔画数据
 pub struct ActiveStroke {
     pub points: Vec<Pos2>,
-    pub widths: Vec<f32>,    // 每个点的宽度（用于动态画笔）
-    pub times: Vec<f64>,     // 每个点的时间戳（用于速度计算）
-    pub start_time: Instant, // 笔画开始时间
+    pub widths: Vec<f32>,            // 每个点的宽度（用于动态画笔）
+    pub times: Vec<f64>,             // 每个点的时间戳（用于速度计算）
+    pub start_time: Instant,         // 笔画开始时间
+    pub last_movement_time: Instant, // 最后一次移动的时间（用于检测停留）
 }
 
 pub struct StartupAnimation {
@@ -528,7 +720,7 @@ impl StartupAnimation {
 
 // 应用程序状态
 pub struct AppState {
-    pub canvas_objects: Vec<CanvasObject>,          // 所有画布对象
+    pub canvas: CanvasState,
     pub active_strokes: HashMap<u64, ActiveStroke>, // 多点触控笔画，存储触控 ID 到正在绘制的笔画
     pub is_drawing: bool,                           // 是否正在绘制
     pub brush_color: Color32,                       // 画笔颜色
@@ -555,157 +747,24 @@ pub struct AppState {
     pub show_quick_color_editor: bool, // 是否显示快捷颜色编辑器
     pub new_quick_color: Color32,      // 新快捷颜色，用于添加
     pub show_touch_points: bool,       // 是否显示触控点，用于调试
-    pub present_mode: PresentMode,     // 垂直同步模式
     pub present_mode_changed: bool,    // 垂直同步模式是否已更改
     pub show_console: bool,            // 是否显示控制台 [Windows]
-    pub startup_animation: StartupAnimation, // 启动动画
+    pub startup_animation: Option<StartupAnimation>, // 启动动画
     pub show_welcome_window: bool,
     pub persistent: PersistentState,
+    // pub toast: Option<Toast>, // 当前显示的 Toast 通知
+    pub toasts: Toasts,
 }
-
-// 启动动画
-const STARTUP_FRAMES: &[&[u8]] = &[
-    include_bytes!("../assets/startup_animation/frames/frame_0001.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0002.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0003.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0004.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0005.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0006.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0007.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0008.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0009.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0010.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0011.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0012.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0013.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0014.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0015.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0016.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0017.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0018.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0019.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0020.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0021.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0022.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0023.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0024.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0025.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0026.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0027.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0028.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0029.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0030.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0031.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0032.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0033.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0034.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0035.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0036.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0037.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0038.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0039.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0040.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0041.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0042.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0043.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0044.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0045.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0046.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0047.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0048.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0049.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0050.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0051.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0052.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0053.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0054.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0055.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0056.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0057.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0058.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0059.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0060.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0061.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0062.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0063.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0064.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0065.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0066.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0067.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0068.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0069.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0070.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0071.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0072.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0073.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0074.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0075.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0076.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0077.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0078.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0079.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0080.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0081.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0082.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0083.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0084.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0085.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0086.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0087.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0088.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0089.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0090.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0091.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0092.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0093.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0094.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0095.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0096.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0097.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0098.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0099.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0100.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0101.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0102.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0103.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0104.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0105.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0106.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0107.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0108.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0109.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0110.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0111.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0112.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0113.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0114.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0115.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0116.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0117.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0118.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0119.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0120.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0121.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0122.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0123.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0124.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0125.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0126.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0127.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0128.png"),
-    include_bytes!("../assets/startup_animation/frames/frame_0129.png"),
-];
-const STARTUP_AUDIO: &[u8] = include_bytes!("../assets/startup_animation/audio.wav");
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            canvas_objects: Vec::new(),
+            canvas: CanvasState::default(),
             active_strokes: HashMap::new(),
             is_drawing: false,
             brush_color: Color32::WHITE,
             brush_width: 3.0,
-            dynamic_brush_width_mode: DynamicBrushWidthMode::Disabled,
+            dynamic_brush_width_mode: DynamicBrushWidthMode::default(),
             current_tool: CanvasTool::Brush,
             eraser_size: 10.0,
             selected_object: None,
@@ -727,12 +786,18 @@ impl Default for AppState {
             show_quick_color_editor: false,
             new_quick_color: Color32::WHITE,
             show_touch_points: false,
-            present_mode: PresentMode::AutoVsync,
             present_mode_changed: false,
             show_console: false,
-            startup_animation: StartupAnimation::new(30.0, STARTUP_FRAMES, STARTUP_AUDIO),
+            startup_animation: None,
             show_welcome_window: true,
             persistent: PersistentState::load_from_file(),
+            // toast: None,
+            // toasts: Toasts::default()
+            //     .anchor(egui::Align2::CENTER_BOTTOM, egui::pos2(0.0, -300.0))
+            //     .direction(egui::Direction::BottomUp),
+            toasts: Toasts::default()
+                .with_anchor(egui_notify::Anchor::BottomRight)
+                .with_margin(egui::vec2(20.0, 20.0)),
         }
     }
 }

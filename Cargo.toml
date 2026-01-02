@@ -1,26 +1,63 @@
+cargo-features = ["codegen-backend"]
+
 [package]
 name = "smartboard"
+description = "A powerful digital whiteboard and drawing application built with Rust, winit, egui, and wgpu."
 version = "0.0.1"
 edition = "2024"
+repository = "https://github.com/Ujhhgtg/smartboard"
+license-file = "LICENSE"
+readme = "README.md"
+build = "build.rs"
 
+# use cargo-features-manager
 [dependencies]
-egui = "0.33.3"
+egui = { version = "0.33.3", features = ["serde"], default-features = false }
 egui-wgpu = { version = "0.33.3", features = ["winit", "wayland"] }
-egui-winit = "0.33.3"
-wgpu = { version = "*", features = ["webgpu", "webgl"] }
-winit = "0.30.12"
+egui-winit = { version = "0.33.3", default-features = false, features = [
+    "wayland",
+] }
+wgpu = { version = "*", features = ["webgpu", "webgl", "serde"] }
+winit = { version = "0.30.12", features = [
+    "rwh_06",
+    "wayland",
+    "wayland-csd-adwaita",
+    "wayland-dlopen",
+], default-features = false }
 pollster = "*"
-rfd = "*"
-image = "*"
+rfd = { version = "*", features = [
+    "wayland",
+    "xdg-portal",
+], default-features = false }
+image = { version = "*", features = [
+    "default-formats",
+], default-features = false }
 fontdb = "*"
-rodio = { version = "0.21.1", default-features = false, features = [
+rodio = { version = "*", default-features = false, features = [
     "wav",
     "playback",
 ] }
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 dirs = "*"
-ecolor = { version = "*", features = ["serde"] }
+egui-notify = "*"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "*", features = ["Win32_System_Console"] }
+
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[profile.dev]
+debug = "line-tables-only"
+codegen-backend = "cranelift"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
+
+[profile.release]
+strip = true
