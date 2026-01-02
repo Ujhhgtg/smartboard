@@ -39,23 +39,27 @@ serde_json = "*"
 dirs = "*"
 egui-notify = "*"
 
+[build-dependencies]
+shellexpand = "*"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "*", features = ["Win32_System_Console"] }
 
 [profile.dev]
 debug = "line-tables-only"
 codegen-backend = "cranelift"
-rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]
+rustflags = ["-Zthreads=8"]
 
 [profile.dev.package."*"]
 debug = false
 
-[profile.debugging]
-inherits = "dev"
-debug = true
-rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]
-
 [profile.release]
 lto = "thin"
 strip = true
+rustflags = ["-Zthreads=8"]
+
+[target.'cfg(target_os = "linux")'.profile.dev]
+rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]
+
+[target.'cfg(target_os = "linux")'.profile.release]
 rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]

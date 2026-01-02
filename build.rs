@@ -2,6 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let frames_dir = manifest_dir
         .join("assets")
         .join("startup_animation")
@@ -23,15 +24,12 @@ fn main() {
 
     entries.sort();
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     fs::create_dir_all(&out_dir).unwrap();
 
     let mut code = String::from("pub const STARTUP_FRAMES: &[&[u8]] = &[\n");
-
     for path in entries {
         code.push_str(&format!("    include_bytes!(r\"{}\"),\n", path.display()));
     }
-
     code.push_str("];\n");
 
     fs::write(out_dir.join("startup_frames.rs"), code).unwrap();

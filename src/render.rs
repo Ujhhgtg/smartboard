@@ -68,7 +68,7 @@ impl RenderState {
             format: *swapchain_format,
             width,
             height,
-            present_mode: crate::state::WGPU_PRESENTMODE_AUTOVSYNC,
+            present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 0,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],

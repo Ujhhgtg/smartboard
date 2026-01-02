@@ -503,7 +503,7 @@ impl Default for PersistentState {
 
             show_fps: true,
             window_mode: WindowMode::default(),
-            present_mode: crate::state::WGPU_PRESENTMODE_AUTOVSYNC,
+            present_mode: PresentMode::AutoVsync,
             optimization_policy: OptimizationPolicy::default(),
 
             keep_insertion_window_open: true,
@@ -833,9 +833,3 @@ impl Default for AppState {
         }
     }
 }
-
-#[cfg(target_os = "linux")]
-pub const WGPU_PRESENTMODE_AUTOVSYNC: wgpu::PresentMode = wgpu::PresentMode::AAutoVsync;
-
-#[cfg(not(target_os = "linux"))]
-pub const WGPU_PRESENTMODE_AUTOVSYNC: wgpu::PresentMode = wgpu::PresentMode::AutoVsync;
