@@ -375,16 +375,14 @@ impl App {
                             if self.state.is_drawing {
                                 for (_touch_id, active_stroke) in self.state.active_strokes.drain()
                                 {
-                                    if active_stroke.points.len() > 1 {
-                                        self.state.canvas.objects.push(CanvasObject::Stroke(
-                                            crate::state::CanvasStroke {
-                                                points: active_stroke.points,
-                                                widths: active_stroke.widths,
-                                                color: old_color,
-                                                base_width: self.state.brush_width,
-                                            },
-                                        ));
-                                    }
+                                    self.state.canvas.objects.push(CanvasObject::Stroke(
+                                        crate::state::CanvasStroke {
+                                            points: active_stroke.points,
+                                            widths: active_stroke.widths,
+                                            color: old_color,
+                                            base_width: self.state.brush_width,
+                                        },
+                                    ));
                                 }
                                 self.state.is_drawing = false;
                             }
@@ -1168,9 +1166,7 @@ impl App {
 
             // 绘制当前正在绘制的笔画
             for (_touch_id, active_stroke) in &self.state.active_strokes {
-                if active_stroke.points.len() >= 2
-                    && active_stroke.widths.len() == active_stroke.points.len()
-                {
+                if active_stroke.widths.len() == active_stroke.points.len() {
                     // 检查是否所有宽度相同
                     let all_same_width = active_stroke
                         .widths
@@ -2013,9 +2009,7 @@ impl App {
                             let touch_id = 0;
                             if let Some(active_stroke) = self.state.active_strokes.remove(&touch_id)
                             {
-                                if active_stroke.points.len() > 1
-                                    && active_stroke.widths.len() == active_stroke.points.len()
-                                {
+                                if active_stroke.widths.len() == active_stroke.points.len() {
                                     // 应用笔画平滑
                                     let final_points = if self.state.persistent.stroke_smoothing {
                                         AppUtils::apply_stroke_smoothing(&active_stroke.points)
@@ -2045,6 +2039,24 @@ impl App {
                             // 检查是否还有其他正在绘制的笔画
                             self.state.is_drawing = !self.state.active_strokes.is_empty();
                         }
+                    } else if response.clicked() {
+                        // 处理单击事件 - 绘制单个点
+                        if let Some(pos) = pointer_pos {
+                            if pos.x >= rect.min.x
+                                && pos.x <= rect.max.x
+                                && pos.y >= rect.min.y
+                                && pos.y <= rect.max.y
+                            {
+                                self.state.canvas.objects.push(CanvasObject::Stroke(
+                                    crate::state::CanvasStroke {
+                                        points: vec![pos],
+                                        widths: vec![self.state.brush_width],
+                                        color: self.state.brush_color,
+                                        base_width: self.state.brush_width,
+                                    },
+                                ));
+                            }
+                        }
                     }
 
                     // 如果鼠标在画布内移动且正在绘制，也添加点（用于平滑绘制）
@@ -2061,9 +2073,7 @@ impl App {
                                     // 检查是否停留超过 0.5 秒
                                     let time_since_last_movement =
                                         active_stroke.last_movement_time.elapsed().as_secs_f32();
-                                    if time_since_last_movement > 0.5
-                                        && active_stroke.points.len() >= 2
-                                    {
+                                    if time_since_last_movement > 0.5 {
                                         // 拉直笔画
                                         let straightened_points = AppUtils::straighten_stroke(
                                             &active_stroke.points,
@@ -2319,9 +2329,7 @@ impl ApplicationHandler for App {
                         // 如果当前工具是画笔，结束笔画
                         if self.state.current_tool == CanvasTool::Brush {
                             if let Some(active_stroke) = self.state.active_strokes.remove(&id) {
-                                if active_stroke.points.len() > 1
-                                    && active_stroke.widths.len() == active_stroke.points.len()
-                                {
+                                if active_stroke.widths.len() == active_stroke.points.len() {
                                     // 应用笔画平滑
                                     let final_points = if self.state.persistent.stroke_smoothing {
                                         AppUtils::apply_stroke_smoothing(&active_stroke.points)
