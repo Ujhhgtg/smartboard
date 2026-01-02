@@ -21,21 +21,31 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.1
 
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
 
-      - name: Install codegen
+      - name: Install cranelift codegen
         run: rustup component add rustc-codegen-cranelift-preview --toolchain nightly
 
-      - name: Install mold (Linux)
+      - name: Cache build dir
+        uses: actions/cache@v5
+        with:
+          path: |
+            target
+          key: |
+            cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt update
-          sudo apt install -y mold
+          sudo apt install -y mold libasound2-dev pkg-config
 
       - name: Build (debug)
         run: cargo build --verbose
@@ -44,17 +54,15 @@ jobs:
         run: cargo build --release --verbose
 
       - name: Upload debug artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: debug-${{ matrix.os }}
-          path: |
-            target/debug/
+          path: target/debug/
           if-no-files-found: error
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.os }}
-          path: |
-            target/release/
+          path: target/release/
           if-no-files-found: error
