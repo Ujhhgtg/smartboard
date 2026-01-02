@@ -705,6 +705,14 @@ impl App {
                             ui.label("显示启动动画:");
                             ui.checkbox(&mut self.state.persistent.show_startup_animation, "");
                         });
+
+                        ui.horizontal(|ui| {
+                            ui.label("窗口透明度");
+                            ui.add(egui::Slider::new(
+                                &mut self.state.persistent.window_opacity,
+                                0.0..=1.0,
+                            ));
+                        });
                     });
 
                     ui.collapsing("绘制", |ui| {

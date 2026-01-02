@@ -463,6 +463,7 @@ impl CanvasState {
 pub struct PersistentState {
     pub theme_mode: ThemeMode,
     pub background_color: Color32,
+    pub window_opacity: f32,
 
     pub stroke_smoothing: bool,
     pub stroke_straightening: bool,
@@ -486,6 +487,7 @@ impl Default for PersistentState {
         Self {
             theme_mode: ThemeMode::default(),
             background_color: Color32::from_rgb(15, 38, 30),
+            window_opacity: 1.0,
 
             stroke_smoothing: true,
             stroke_straightening: true,
