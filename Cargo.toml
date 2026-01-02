@@ -1,4 +1,4 @@
-cargo-features = ["codegen-backend"]
+cargo-features = ["codegen-backend", "profile-rustflags"]
 
 [package]
 name = "smartboard"
@@ -45,6 +45,7 @@ windows = { version = "*", features = ["Win32_System_Console"] }
 [profile.dev]
 debug = "line-tables-only"
 codegen-backend = "cranelift"
+rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]
 
 [profile.dev.package."*"]
 debug = false
@@ -52,6 +53,9 @@ debug = false
 [profile.debugging]
 inherits = "dev"
 debug = true
+rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]
 
 [profile.release]
+lto = "thin"
 strip = true
+rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]
