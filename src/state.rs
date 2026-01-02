@@ -553,16 +553,18 @@ pub struct CanvasStroke {
 
 impl Draw for CanvasStroke {
     fn draw(&self, painter: &egui::Painter, selected: bool) {
-        if self.points.len() < 2 {
-            return;
-        }
-
         let color = if selected { Color32::BLUE } else { self.color };
 
         // 如果所有宽度相同，使用简单路径
         let all_same_width = self.widths.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01);
 
-        if all_same_width && self.points.len() == 2 {
+        if all_same_width && self.points.len() == 1 {
+            painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
+                self.points[0],
+                self.widths[0] / 2.0,
+                color,
+            )));
+        } else if all_same_width && self.points.len() == 2 {
             // 只有两个点且宽度相同，直接画线段
             painter.line_segment(
                 [self.points[0], self.points[1]],
