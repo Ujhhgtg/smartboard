@@ -12,6 +12,8 @@ use std::io::Cursor;
 use std::time::Instant;
 use wgpu::PresentMode;
 
+use crate::utils::AppUtils;
+
 // 动态画笔模式
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DynamicBrushWidthMode {
@@ -19,6 +21,22 @@ pub enum DynamicBrushWidthMode {
     Disabled, // 禁用
     BrushTip,   // 模拟笔锋
     SpeedBased, // 基于速度
+}
+
+// 调整句柄类型
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TransformHandle {
+    // 8个调整大小的句柄
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+    // 旋转句柄
+    Rotate,
 }
 
 // 工具类型
@@ -48,9 +66,15 @@ pub struct CanvasImage {
     pub marked_for_deletion: bool, // deferred deletion to avoid panic
 }
 
+impl CanvasImage {
+    pub fn bounding_box(&self) -> egui::Rect {
+        egui::Rect::from_min_size(self.pos, self.size)
+    }
+}
+
 impl Draw for CanvasImage {
     fn draw(&self, painter: &egui::Painter, selected: bool) {
-        let img_rect = egui::Rect::from_min_size(self.pos, self.size);
+        let img_rect = self.bounding_box();
         painter.image(
             self.texture.id(),
             img_rect,
@@ -58,7 +82,7 @@ impl Draw for CanvasImage {
             Color32::WHITE,
         );
 
-        // 如果被选中，绘制边框
+        // 如果被选中，绘制边框和调整句柄
         if selected {
             painter.rect_stroke(
                 img_rect,
@@ -66,6 +90,7 @@ impl Draw for CanvasImage {
                 Stroke::new(2.0, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
+            crate::utils::AppUtils::draw_resize_handles(painter, img_rect);
         }
     }
 }
@@ -91,6 +116,16 @@ pub struct CanvasText {
     pub font_size: f32,
 }
 
+impl CanvasText {
+    pub fn bounding_box(&self) -> egui::Rect {
+        // 估算文本尺寸（近似值）
+        let approx_char_width = self.font_size * 0.6;
+        let approx_width = self.text.len() as f32 * approx_char_width;
+        let approx_height = self.font_size * 1.2;
+        egui::Rect::from_min_size(self.pos, egui::vec2(approx_width, approx_height))
+    }
+}
+
 impl Draw for CanvasText {
     fn draw(&self, painter: &egui::Painter, selected: bool) {
         // Draw text using egui's text rendering
@@ -111,14 +146,14 @@ impl Draw for CanvasText {
         painter.add(text_shape);
 
         if selected {
-            let text_size = text_galley.size();
-            let text_rect = egui::Rect::from_min_size(self.pos, text_size);
+            let text_rect = self.bounding_box();
             painter.rect_stroke(
                 text_rect,
                 0.0,
                 Stroke::new(2.0, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
+            crate::utils::AppUtils::draw_resize_handles(painter, text_rect);
         }
     }
 }
@@ -140,6 +175,47 @@ pub struct CanvasShape {
     pub size: f32,
     pub color: Color32,
     pub rotation: f32,
+}
+
+impl CanvasShape {
+    pub fn bounding_box(&self) -> egui::Rect {
+        match self.shape_type {
+            CanvasShapeType::Line => {
+                let end_point = Pos2::new(self.pos.x + self.size, self.pos.y);
+                let min_x = self.pos.x.min(end_point.x) - 5.0;
+                let max_x = self.pos.x.max(end_point.x) + 5.0;
+                let min_y = self.pos.y.min(end_point.y) - 5.0;
+                let max_y = self.pos.y.max(end_point.y) + 5.0;
+                egui::Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y))
+            }
+            CanvasShapeType::Arrow => {
+                let end_point = Pos2::new(self.pos.x + self.size, self.pos.y);
+                let min_x = self.pos.x.min(end_point.x) - 5.0;
+                let max_x = self.pos.x.max(end_point.x) + 5.0;
+                let min_y = self.pos.y.min(end_point.y) - 15.0;
+                let max_y = self.pos.y.max(end_point.y) + 15.0;
+                egui::Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y))
+            }
+            CanvasShapeType::Rectangle => {
+                egui::Rect::from_min_size(self.pos, egui::vec2(self.size, self.size))
+            }
+            CanvasShapeType::Triangle => {
+                let half_size = self.size / 2.0;
+                let min_x = self.pos.x - 5.0;
+                let max_x = self.pos.x + self.size + 5.0;
+                let min_y = self.pos.y - 5.0;
+                let max_y = self.pos.y + half_size + 5.0;
+                egui::Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y))
+            }
+            CanvasShapeType::Circle => {
+                let radius = self.size / 2.0;
+                egui::Rect::from_min_max(
+                    Pos2::new(self.pos.x - radius - 5.0, self.pos.y - radius - 5.0),
+                    Pos2::new(self.pos.x + radius + 5.0, self.pos.y + radius + 5.0),
+                )
+            }
+        }
+    }
 }
 
 impl Draw for CanvasShape {
@@ -196,15 +272,16 @@ impl Draw for CanvasShape {
             }
         }
 
-        // 如果被选中，绘制边框
+        // 如果被选中，绘制边框和调整句柄
         if selected {
-            let shape_rect = crate::utils::AppUtils::calculate_shape_bounding_box(self);
+            let shape_rect = self.bounding_box();
             painter.rect_stroke(
                 shape_rect,
                 0.0,
                 Stroke::new(2.0, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
+            crate::utils::AppUtils::draw_resize_handles(painter, shape_rect);
         }
     }
 }
@@ -228,50 +305,15 @@ impl CanvasObject {
             CanvasObject::Shape(shape) => shape.draw(painter, selected),
         }
     }
-}
 
-// 调整大小锚点类型
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ResizeAnchor {
-    Top,
-    Bottom,
-    Left,
-    Right,
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-}
-
-// 变换操作类型
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TransformOperationType {
-    Move,
-    Resize,
-    Rotate,
-}
-
-// 变换操作
-#[derive(Clone, Copy, Debug)]
-pub struct TransformOperation {
-    pub operation_type: TransformOperationType,
-    pub start_pos: Pos2,
-    pub start_object_pos: Pos2,
-    pub start_size: egui::Vec2,
-    pub start_angle: f32,
-    pub anchor: Option<ResizeAnchor>,
-    pub center: Pos2,
-    pub aspect_ratio: Option<f32>,
-}
-
-// 对象变换约束
-#[derive(Clone, Copy, Debug)]
-pub struct TransformConstraints {
-    pub min_width: f32,
-    pub min_height: f32,
-    pub preserve_aspect_ratio: bool,
-    pub allow_rotation: bool,
-    pub canvas_bounds: Option<egui::Rect>,
+    pub fn bounding_box(&self) -> egui::Rect {
+        match self {
+            CanvasObject::Stroke(stroke) => stroke.bounding_box(),
+            CanvasObject::Image(image) => image.bounding_box(),
+            CanvasObject::Text(text) => text.bounding_box(),
+            CanvasObject::Shape(shape) => shape.bounding_box(),
+        }
+    }
 }
 
 // // Toast 通知类型
@@ -475,25 +517,43 @@ impl CanvasState {
 // 应用程序设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentState {
+    #[serde(default)]
     pub theme_mode: ThemeMode,
+    #[serde(default)]
     pub background_color: Color32,
+    #[serde(default)]
     pub window_opacity: f32,
 
+    #[serde(default)]
     pub stroke_smoothing: bool,
+    #[serde(default)]
     pub stroke_straightening: bool,
+    #[serde(default)]
     pub stroke_straightening_tolerance: f32,
+    #[serde(default)]
     pub interpolation_frequency: f32,
+    #[serde(default)]
     pub quick_colors: Vec<Color32>,
 
+    #[serde(default)]
     pub show_fps: bool,
+    #[serde(default)]
     pub window_mode: WindowMode,
+    #[serde(default)]
     pub present_mode: PresentMode,
+    #[serde(default)]
     pub optimization_policy: OptimizationPolicy,
 
+    #[serde(default)]
     pub keep_insertion_window_open: bool,
 
+    #[serde(default)]
     pub show_welcome_window_on_start: bool,
+    #[serde(default)]
     pub show_startup_animation: bool,
+
+    #[serde(default)]
+    pub easter_egg_redo: bool,
 }
 
 impl Default for PersistentState {
@@ -507,13 +567,7 @@ impl Default for PersistentState {
             stroke_straightening: true,
             stroke_straightening_tolerance: 20.0,
             interpolation_frequency: 0.1,
-            quick_colors: vec![
-                Color32::from_rgb(255, 0, 0),     // 红色
-                Color32::from_rgb(255, 255, 0),   // 黄色
-                Color32::from_rgb(0, 255, 0),     // 绿色
-                Color32::from_rgb(0, 0, 0),       // 黑色
-                Color32::from_rgb(255, 255, 255), // 白色
-            ],
+            quick_colors: AppUtils::get_default_quick_colors(),
 
             show_fps: true,
             window_mode: WindowMode::default(),
@@ -524,6 +578,8 @@ impl Default for PersistentState {
 
             show_welcome_window_on_start: true,
             show_startup_animation: true,
+
+            easter_egg_redo: false,
         }
     }
 }
@@ -567,6 +623,36 @@ pub struct CanvasStroke {
     pub base_width: f32,
 }
 
+impl CanvasStroke {
+    pub fn bounding_box(&self) -> egui::Rect {
+        if self.points.is_empty() {
+            return egui::Rect::from_min_max(Pos2::ZERO, Pos2::ZERO);
+        }
+
+        // 计算所有点的最小和最大坐标
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+
+        for point in &self.points {
+            min_x = min_x.min(point.x);
+            max_x = max_x.max(point.x);
+            min_y = min_y.min(point.y);
+            max_y = max_y.max(point.y);
+        }
+
+        // 考虑笔画宽度，添加一些边距
+        let max_width = self.widths.iter().copied().fold(0.0, f32::max);
+        let padding = max_width / 2.0 + 5.0; // 添加额外的5像素边距
+
+        egui::Rect::from_min_max(
+            Pos2::new(min_x - padding, min_y - padding),
+            Pos2::new(max_x + padding, max_y + padding),
+        )
+    }
+}
+
 impl Draw for CanvasStroke {
     fn draw(&self, painter: &egui::Painter, selected: bool) {
         let color = if selected { Color32::BLUE } else { self.color };
@@ -606,7 +692,7 @@ impl Draw for CanvasStroke {
 
         // 如果被选中，绘制边框（类似于形状的实现）
         if selected {
-            let stroke_rect = crate::utils::AppUtils::calculate_stroke_bounding_box(self);
+            let stroke_rect = self.bounding_box();
             painter.rect_stroke(
                 stroke_rect,
                 0.0,
@@ -773,12 +859,39 @@ impl StartupAnimation {
     }
 }
 
-// 历史记录结构
+// 历史记录命令枚举
+#[derive(Debug, Clone)]
+pub enum HistoryCommand {
+    // 添加对象命令
+    AddObject {
+        index: usize,
+        object: CanvasObject,
+    },
+    // 删除对象命令
+    RemoveObject {
+        index: usize,
+        object: CanvasObject,
+    },
+    // 修改对象命令（用于对象属性更改）
+    ModifyObject {
+        index: usize,
+        old_object: CanvasObject,
+        new_object: CanvasObject,
+    },
+    // 批量操作（用于清空画布等）
+    ClearObjects {
+        objects: Vec<CanvasObject>,
+    },
+}
+
+// 优化的历史记录结构
 #[derive(Debug, Clone)]
 pub struct History {
-    pub undo_stack: Vec<CanvasState>,
-    pub redo_stack: Vec<CanvasState>,
-    pub max_history_size: usize,
+    undo_stack: Vec<HistoryCommand>,
+    redo_stack: Vec<HistoryCommand>,
+    max_history_size: usize,
+    memory_usage: usize,
+    max_memory_usage: usize, // 最大内存使用量 (字节)
 }
 
 impl History {
@@ -787,51 +900,312 @@ impl History {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             max_history_size,
+            memory_usage: 0,
+            max_memory_usage: 50 * 1024 * 1024, // 默认 50MB
         }
     }
 
-    pub fn save_state(&mut self, state: &CanvasState) {
-        // 保存当前状态到撤销栈
-        self.undo_stack.push(state.clone());
+    // 估算命令的内存使用量
+    fn estimate_command_size(command: &HistoryCommand) -> usize {
+        match command {
+            HistoryCommand::AddObject { object, .. } => {
+                // 估算对象大小
+                match object {
+                    CanvasObject::Stroke(stroke) => {
+                        stroke.points.len() * std::mem::size_of::<Pos2>()
+                            + stroke.widths.len() * std::mem::size_of::<f32>()
+                            + 128 // 其他字段
+                    }
+                    CanvasObject::Image(_) => 256, // 图像对象相对较小（不包含纹理数据）
+                    CanvasObject::Text(text) => text.text.len() + 128,
+                    CanvasObject::Shape(_) => 128,
+                }
+            }
+            HistoryCommand::RemoveObject { object, .. } => {
+                Self::estimate_command_size(&HistoryCommand::AddObject {
+                    index: 0,
+                    object: object.clone(),
+                })
+            }
+            HistoryCommand::ModifyObject {
+                old_object,
+                new_object,
+                ..
+            } => {
+                Self::estimate_command_size(&HistoryCommand::AddObject {
+                    index: 0,
+                    object: old_object.clone(),
+                }) + Self::estimate_command_size(&HistoryCommand::AddObject {
+                    index: 0,
+                    object: new_object.clone(),
+                })
+            }
+            HistoryCommand::ClearObjects { objects } => objects
+                .iter()
+                .map(|obj| {
+                    Self::estimate_command_size(&HistoryCommand::AddObject {
+                        index: 0,
+                        object: obj.clone(),
+                    })
+                })
+                .sum(),
+        }
+    }
 
-        // 如果超过最大历史大小，移除最旧的状态
+    // 清理历史记录以保持内存限制
+    fn enforce_memory_limit(&mut self) {
+        while self.memory_usage > self.max_memory_usage && !self.undo_stack.is_empty() {
+            let removed_command = self.undo_stack.remove(0);
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&removed_command));
+        }
+    }
+
+    // 保存添加对象的命令
+    pub fn save_add_object(&mut self, index: usize, object: CanvasObject) {
+        let command = HistoryCommand::AddObject { index, object };
+        self.memory_usage += Self::estimate_command_size(&command);
+        self.undo_stack.push(command);
+
+        // 清理超出限制的历史记录
         if self.undo_stack.len() > self.max_history_size {
-            self.undo_stack.remove(0);
+            let removed_command = self.undo_stack.remove(0);
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&removed_command));
         }
+        self.enforce_memory_limit();
 
-        // 清空重做栈，因为新的操作使得重做历史无效
-        self.redo_stack.clear();
+        // 清空重做栈
+        for cmd in self.redo_stack.drain(..) {
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&cmd));
+        }
     }
 
+    // 保存删除对象的命令
+    pub fn save_remove_object(&mut self, index: usize, object: CanvasObject) {
+        let command = HistoryCommand::RemoveObject { index, object };
+        self.memory_usage += Self::estimate_command_size(&command);
+        self.undo_stack.push(command);
+
+        if self.undo_stack.len() > self.max_history_size {
+            let removed_command = self.undo_stack.remove(0);
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&removed_command));
+        }
+        self.enforce_memory_limit();
+
+        for cmd in self.redo_stack.drain(..) {
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&cmd));
+        }
+    }
+
+    // 保存修改对象的命令
+    pub fn save_modify_object(
+        &mut self,
+        index: usize,
+        old_object: CanvasObject,
+        new_object: CanvasObject,
+    ) {
+        let command = HistoryCommand::ModifyObject {
+            index,
+            old_object,
+            new_object,
+        };
+        self.memory_usage += Self::estimate_command_size(&command);
+        self.undo_stack.push(command);
+
+        if self.undo_stack.len() > self.max_history_size {
+            let removed_command = self.undo_stack.remove(0);
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&removed_command));
+        }
+        self.enforce_memory_limit();
+
+        for cmd in self.redo_stack.drain(..) {
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&cmd));
+        }
+    }
+
+    // 保存清空对象的命令
+    pub fn save_clear_objects(&mut self, objects: Vec<CanvasObject>) {
+        let command = HistoryCommand::ClearObjects { objects };
+        self.memory_usage += Self::estimate_command_size(&command);
+        self.undo_stack.push(command);
+
+        if self.undo_stack.len() > self.max_history_size {
+            let removed_command = self.undo_stack.remove(0);
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&removed_command));
+        }
+        self.enforce_memory_limit();
+
+        for cmd in self.redo_stack.drain(..) {
+            self.memory_usage = self
+                .memory_usage
+                .saturating_sub(Self::estimate_command_size(&cmd));
+        }
+    }
+
+    // 执行撤销操作
     pub fn undo(&mut self, current_state: &mut CanvasState) -> bool {
-        if let Some(previous_state) = self.undo_stack.pop() {
-            // 保存当前状态到重做栈
-            self.redo_stack.push(current_state.clone());
-
-            // 恢复到之前的状态
-            *current_state = previous_state;
+        if let Some(command) = self.undo_stack.pop() {
+            match command {
+                HistoryCommand::AddObject { index, object } => {
+                    // 撤销添加操作 = 删除对象
+                    if index < current_state.objects.len() {
+                        current_state.objects.remove(index);
+                        // 将撤销操作的逆操作推送到重做栈
+                        let inverse_cmd = HistoryCommand::RemoveObject { index, object };
+                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
+                        self.redo_stack.push(inverse_cmd);
+                    }
+                }
+                HistoryCommand::RemoveObject { index, object } => {
+                    // 撤销删除操作 = 添加对象回来
+                    if index <= current_state.objects.len() {
+                        current_state.objects.insert(index, object.clone());
+                        // 将撤销操作的逆操作推送到重做栈
+                        let inverse_cmd = HistoryCommand::AddObject { index, object };
+                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
+                        self.redo_stack.push(inverse_cmd);
+                    }
+                }
+                HistoryCommand::ModifyObject {
+                    index,
+                    old_object,
+                    new_object,
+                } => {
+                    // 撤销修改操作 = 恢复旧对象
+                    if index < current_state.objects.len() {
+                        let current_object =
+                            std::mem::replace(&mut current_state.objects[index], old_object);
+                        // 将撤销操作的逆操作推送到重做栈
+                        let inverse_cmd = HistoryCommand::ModifyObject {
+                            index,
+                            old_object: current_object,
+                            new_object,
+                        };
+                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
+                        self.redo_stack.push(inverse_cmd);
+                    }
+                }
+                HistoryCommand::ClearObjects { objects } => {
+                    // 撤销清空操作 = 恢复所有对象
+                    let old_objects = std::mem::replace(&mut current_state.objects, objects);
+                    // 将撤销操作的逆操作推送到重做栈
+                    let inverse_cmd = HistoryCommand::ClearObjects {
+                        objects: old_objects,
+                    };
+                    self.memory_usage += Self::estimate_command_size(&inverse_cmd);
+                    self.redo_stack.push(inverse_cmd);
+                }
+            }
             true
         } else {
             false
         }
     }
 
+    // 执行重做操作
     pub fn redo(&mut self, current_state: &mut CanvasState) -> bool {
-        if let Some(next_state) = self.redo_stack.pop() {
-            // 保存当前状态到撤销栈
-            self.undo_stack.push(current_state.clone());
-
-            // 恢复到下一个状态
-            *current_state = next_state;
+        if let Some(command) = self.redo_stack.pop() {
+            match command {
+                HistoryCommand::AddObject { index, object } => {
+                    // 重做添加操作 = 添加对象
+                    if index <= current_state.objects.len() {
+                        current_state.objects.insert(index, object.clone());
+                        // 将逆操作推送到撤销栈
+                        let inverse_cmd = HistoryCommand::RemoveObject { index, object };
+                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
+                        self.undo_stack.push(inverse_cmd);
+                    }
+                }
+                HistoryCommand::RemoveObject { index, object } => {
+                    // 重做删除操作 = 删除对象
+                    if index < current_state.objects.len() {
+                        current_state.objects.remove(index);
+                        // 将逆操作推送到撤销栈
+                        let inverse_cmd = HistoryCommand::AddObject { index, object };
+                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
+                        self.undo_stack.push(inverse_cmd);
+                    }
+                }
+                HistoryCommand::ModifyObject {
+                    index,
+                    old_object: _,
+                    new_object,
+                } => {
+                    // 重做修改操作 = 应用新对象
+                    if index < current_state.objects.len() {
+                        let current_object = std::mem::replace(
+                            &mut current_state.objects[index],
+                            new_object.clone(),
+                        );
+                        // 将逆操作推送到撤销栈
+                        let inverse_cmd = HistoryCommand::ModifyObject {
+                            index,
+                            old_object: current_object,
+                            new_object,
+                        };
+                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
+                        self.undo_stack.push(inverse_cmd);
+                    }
+                }
+                HistoryCommand::ClearObjects { objects } => {
+                    // 重做清空操作 = 恢复保存的对象
+                    let old_objects = std::mem::replace(&mut current_state.objects, objects);
+                    // 将逆操作推送到撤销栈
+                    let inverse_cmd = HistoryCommand::ClearObjects {
+                        objects: old_objects,
+                    };
+                    self.memory_usage += Self::estimate_command_size(&inverse_cmd);
+                    self.undo_stack.push(inverse_cmd);
+                }
+            }
             true
         } else {
             false
         }
     }
 
+    // 获取内存使用量（用于调试）
+    pub fn memory_usage(&self) -> usize {
+        self.memory_usage
+    }
+
+    // 清空历史记录
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.memory_usage = 0;
+    }
+
+    // 检查是否可以撤销
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    // 检查是否可以重做
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    // 兼容性方法：保存完整状态（用于向后兼容）
+    pub fn save_state(&mut self, state: &CanvasState) {
+        // 对于复杂操作，回退到保存完整状态
+        // 这种情况很少发生，主要用于批量操作
+        self.save_clear_objects(state.objects.clone());
     }
 }
 
@@ -846,7 +1220,8 @@ pub struct AppState {
     pub current_tool: CanvasTool,                   // 当前工具
     pub eraser_size: f32,                           // 橡皮擦大小
     pub selected_object: Option<usize>,             // 选中的对象索引
-    pub drag_start_pos: Option<Pos2>,               //
+    pub drag_start_pos: Option<Pos2>,               // 拖拽开始位置
+    pub dragged_handle: Option<TransformHandle>,    // 正在拖拽的调整句柄
     pub show_size_preview: bool,                    //
     pub show_text_dialog: bool,                     //
     pub new_text_content: String,                   //
@@ -855,9 +1230,6 @@ pub struct AppState {
     pub should_quit: bool,                          //
     pub touch_points: HashMap<u64, Pos2>,           // 多点触控点，存储触控 ID 到位置的映射
     pub window_mode_changed: bool,                  // 窗口模式是否已更改
-    pub resize_anchor_hovered: Option<ResizeAnchor>, // 当前悬停的调整大小锚点
-    pub rotation_anchor_hovered: bool,              // 是否悬停在旋转锚点上
-    pub transform_operation: Option<TransformOperation>, // 当前正在进行的变换操作
     // pub available_video_modes: Vec<winit::monitor::VideoModeHandle>, // 可用的视频模式
     // pub selected_video_mode_index: Option<usize>,   // 选中的视频模式索引
     pub show_quick_color_editor: bool, // 是否显示快捷颜色编辑器
@@ -869,7 +1241,6 @@ pub struct AppState {
     pub startup_animation: Option<StartupAnimation>, // 启动动画
     pub show_welcome_window: bool,
     pub persistent: PersistentState,
-    // pub toast: Option<Toast>, // 当前显示的 Toast 通知
     pub toasts: Toasts,
     pub history: History, // 历史记录
 }
@@ -887,6 +1258,7 @@ impl Default for AppState {
             eraser_size: 10.0,
             selected_object: None,
             drag_start_pos: None,
+            dragged_handle: None,
             show_size_preview: false,
             fps_counter: FpsCounter::new(),
             should_quit: false,
@@ -895,9 +1267,6 @@ impl Default for AppState {
             show_shape_dialog: false,
             touch_points: HashMap::new(),
             window_mode_changed: false,
-            resize_anchor_hovered: None,
-            rotation_anchor_hovered: false,
-            transform_operation: None,
             // available_video_modes: Vec::new(),
             // selected_video_mode_index: None,
             show_quick_color_editor: false,
@@ -909,10 +1278,6 @@ impl Default for AppState {
             startup_animation: None,
             show_welcome_window: true,
             persistent: PersistentState::load_from_file(),
-            // toast: None,
-            // toasts: Toasts::default()
-            //     .anchor(egui::Align2::CENTER_BOTTOM, egui::pos2(0.0, -300.0))
-            //     .direction(egui::Direction::BottomUp),
             toasts: Toasts::default()
                 .with_anchor(egui_notify::Anchor::BottomRight)
                 .with_margin(egui::vec2(20.0, 20.0)),

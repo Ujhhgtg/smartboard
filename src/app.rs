@@ -1,8 +1,8 @@
 use crate::render::RenderState;
 use crate::state::{
-    AppState, CanvasImage, CanvasObject, CanvasShape, CanvasShapeType, CanvasState, CanvasText,
-    CanvasTool, DynamicBrushWidthMode, OptimizationPolicy, PersistentState, ResizeAnchor,
-    StartupAnimation, ThemeMode, TransformOperation, TransformOperationType, WindowMode,
+    AppState, CanvasImage, CanvasObject, CanvasShape, CanvasShapeType, CanvasState, CanvasStroke,
+    CanvasText, CanvasTool, DynamicBrushWidthMode, OptimizationPolicy, PersistentState,
+    StartupAnimation, ThemeMode, TransformHandle, WindowMode,
 };
 use crate::utils::AppUtils;
 use core::f32;
@@ -132,6 +132,258 @@ impl App {
 
         if let Some(render_state) = self.render_state.as_mut() {
             render_state.set_present_mode(wgpu_present_mode);
+        }
+    }
+
+    // Move an object by the given delta
+    fn move_object(object: &mut CanvasObject, delta: egui::Vec2) {
+        match object {
+            CanvasObject::Image(img) => {
+                img.pos += delta;
+            }
+            CanvasObject::Text(text) => {
+                text.pos += delta;
+            }
+            CanvasObject::Shape(shape) => {
+                shape.pos += delta;
+            }
+            CanvasObject::Stroke(stroke) => {
+                // For strokes, move all points
+                for point in &mut stroke.points {
+                    *point += delta;
+                }
+            }
+        }
+    }
+
+    // Resize an object using the given handle and delta
+    fn resize_object(
+        object: &mut CanvasObject,
+        handle: TransformHandle,
+        delta: egui::Vec2,
+        drag_start: Pos2,
+        current_pos: Pos2,
+    ) {
+        match object {
+            CanvasObject::Image(img) => {
+                Self::resize_image(img, handle, delta, drag_start, current_pos);
+            }
+            CanvasObject::Text(text) => {
+                Self::resize_text(text, handle, delta);
+            }
+            CanvasObject::Shape(shape) => {
+                Self::resize_shape(shape, handle, delta);
+            }
+            CanvasObject::Stroke(stroke) => {
+                Self::resize_stroke(stroke, handle, delta, drag_start, current_pos);
+            }
+        }
+    }
+
+    fn resize_image(
+        img: &mut CanvasImage,
+        handle: TransformHandle,
+        delta: egui::Vec2,
+        drag_start: Pos2,
+        current_pos: Pos2,
+    ) {
+        let bbox = img.bounding_box();
+        let center = bbox.center();
+
+        match handle {
+            TransformHandle::TopLeft => {
+                let new_min = current_pos;
+                let new_max = bbox.max;
+                let new_size = egui::vec2(
+                    (new_max.x - new_min.x).max(10.0),
+                    (new_max.y - new_min.y).max(10.0),
+                );
+                img.size = new_size;
+                img.pos = new_min;
+            }
+            TransformHandle::Top => {
+                let new_height = (bbox.max.y - current_pos.y).max(10.0);
+                img.size.y = new_height;
+                img.pos.y = current_pos.y;
+            }
+            TransformHandle::TopRight => {
+                let new_max = Pos2::new(current_pos.x, bbox.max.y);
+                let new_min = Pos2::new(bbox.min.x, current_pos.y);
+                let new_size = egui::vec2(
+                    (new_max.x - new_min.x).max(10.0),
+                    (new_max.y - new_min.y).max(10.0),
+                );
+                img.size = new_size;
+                img.pos.y = new_min.y;
+            }
+            TransformHandle::Left => {
+                let new_width = (bbox.max.x - current_pos.x).max(10.0);
+                img.size.x = new_width;
+                img.pos.x = current_pos.x;
+            }
+            TransformHandle::Right => {
+                let new_width = (current_pos.x - bbox.min.x).max(10.0);
+                img.size.x = new_width;
+            }
+            TransformHandle::BottomLeft => {
+                let new_min = Pos2::new(current_pos.x, bbox.min.y);
+                let new_max = Pos2::new(bbox.max.x, current_pos.y);
+                let new_size = egui::vec2(
+                    (new_max.x - new_min.x).max(10.0),
+                    (new_max.y - new_min.y).max(10.0),
+                );
+                img.size = new_size;
+                img.pos.x = new_min.x;
+            }
+            TransformHandle::Bottom => {
+                let new_height = (current_pos.y - bbox.min.y).max(10.0);
+                img.size.y = new_height;
+            }
+            TransformHandle::BottomRight => {
+                let new_size = egui::vec2(
+                    (current_pos.x - bbox.min.x).max(10.0),
+                    (current_pos.y - bbox.min.y).max(10.0),
+                );
+                img.size = new_size;
+            }
+            TransformHandle::Rotate => {
+                // For now, ignore rotation for images
+            }
+        }
+    }
+
+    fn resize_shape(shape: &mut CanvasShape, handle: TransformHandle, delta: egui::Vec2) {
+        match handle {
+            TransformHandle::TopLeft
+            | TransformHandle::Top
+            | TransformHandle::TopRight
+            | TransformHandle::Left
+            | TransformHandle::Right
+            | TransformHandle::BottomLeft
+            | TransformHandle::Bottom
+            | TransformHandle::BottomRight => {
+                // For shapes, scale the size uniformly
+                let scale_factor = 1.0 + (delta.x + delta.y) / 200.0; // Simple scaling
+                shape.size = (shape.size * scale_factor).max(10.0);
+            }
+            TransformHandle::Rotate => {
+                // For now, ignore rotation for shapes
+            }
+        }
+    }
+
+    fn resize_text(text: &mut CanvasText, handle: TransformHandle, delta: egui::Vec2) {
+        match handle {
+            TransformHandle::TopLeft
+            | TransformHandle::Top
+            | TransformHandle::TopRight
+            | TransformHandle::Left
+            | TransformHandle::Right
+            | TransformHandle::BottomLeft
+            | TransformHandle::Bottom
+            | TransformHandle::BottomRight => {
+                // Scale font size
+                let scale_factor = 1.0 + (delta.x + delta.y) / 200.0;
+                text.font_size = (text.font_size * scale_factor).max(6.0);
+            }
+            TransformHandle::Rotate => {
+                // For now, ignore rotation for text
+            }
+        }
+    }
+
+    fn resize_stroke(
+        stroke: &mut CanvasStroke,
+        handle: TransformHandle,
+        delta: egui::Vec2,
+        drag_start: Pos2,
+        current_pos: Pos2,
+    ) {
+        let bbox = stroke.bounding_box();
+        let center = bbox.center();
+
+        // Calculate scale factors
+        let scale_x = if bbox.width() > 0.0 {
+            (bbox.width() + delta.x) / bbox.width()
+        } else {
+            1.0
+        };
+        let scale_y = if bbox.height() > 0.0 {
+            (bbox.height() + delta.y) / bbox.height()
+        } else {
+            1.0
+        };
+
+        match handle {
+            TransformHandle::TopLeft => {
+                let scale = scale_x.min(scale_y);
+                Self::scale_stroke_points(stroke, center, scale, scale);
+                // Adjust position
+                let new_center = center + delta / 2.0;
+                Self::move_stroke_to_center(stroke, new_center);
+            }
+            TransformHandle::Top => {
+                Self::scale_stroke_points(stroke, center, 1.0, scale_y);
+                let new_center = Pos2::new(center.x, center.y + delta.y / 2.0);
+                Self::move_stroke_to_center(stroke, new_center);
+            }
+            TransformHandle::TopRight => {
+                let scale = scale_x.min(scale_y);
+                Self::scale_stroke_points(stroke, center, scale, scale);
+                let new_center = center + delta / 2.0;
+                Self::move_stroke_to_center(stroke, new_center);
+            }
+            TransformHandle::Left => {
+                Self::scale_stroke_points(stroke, center, scale_x, 1.0);
+                let new_center = Pos2::new(center.x + delta.x / 2.0, center.y);
+                Self::move_stroke_to_center(stroke, new_center);
+            }
+            TransformHandle::Right => {
+                Self::scale_stroke_points(stroke, center, scale_x, 1.0);
+                let new_center = Pos2::new(center.x + delta.x / 2.0, center.y);
+                Self::move_stroke_to_center(stroke, new_center);
+            }
+            TransformHandle::BottomLeft => {
+                let scale = scale_x.min(scale_y);
+                Self::scale_stroke_points(stroke, center, scale, scale);
+                let new_center = center + delta / 2.0;
+                Self::move_stroke_to_center(stroke, new_center);
+            }
+            TransformHandle::Bottom => {
+                Self::scale_stroke_points(stroke, center, 1.0, scale_y);
+                let new_center = Pos2::new(center.x, center.y + delta.y / 2.0);
+                Self::move_stroke_to_center(stroke, new_center);
+            }
+            TransformHandle::BottomRight => {
+                let scale = scale_x.min(scale_y);
+                Self::scale_stroke_points(stroke, center, scale, scale);
+                let new_center = center + delta / 2.0;
+                Self::move_stroke_to_center(stroke, new_center);
+            }
+            TransformHandle::Rotate => {
+                // For now, ignore rotation for strokes
+            }
+        }
+    }
+
+    fn scale_stroke_points(stroke: &mut CanvasStroke, center: Pos2, scale_x: f32, scale_y: f32) {
+        for point in &mut stroke.points {
+            let relative = *point - center;
+            point.x = center.x + relative.x * scale_x;
+            point.y = center.y + relative.y * scale_y;
+        }
+        // Scale widths proportionally
+        let avg_scale = (scale_x + scale_y) / 2.0;
+        for width in &mut stroke.widths {
+            *width *= avg_scale;
+        }
+    }
+
+    fn move_stroke_to_center(stroke: &mut CanvasStroke, new_center: Pos2) {
+        let current_center = stroke.bounding_box().center();
+        let offset = new_center - current_center;
+        for point in &mut stroke.points {
+            *point += offset;
         }
     }
 
@@ -335,14 +587,14 @@ impl App {
                             .selectable_value(
                                 &mut self.state.current_tool,
                                 CanvasTool::ObjectEraser,
-                                "对象橡皮擦",
+                                "对象擦",
                             )
                             .changed()
                         || ui
                             .selectable_value(
                                 &mut self.state.current_tool,
                                 CanvasTool::PixelEraser,
-                                "像素橡皮擦",
+                                "像素擦",
                             )
                             .changed()
                         || ui
@@ -367,6 +619,62 @@ impl App {
                 });
 
                 ui.separator();
+
+                // 选择工具相关设置
+                if self.state.current_tool == CanvasTool::Select {
+                    if self.state.selected_object.is_some() {
+                        ui.horizontal(|ui| {
+                            ui.label("对象操作:");
+                            if ui.button("删除").clicked() {
+                                if let Some(selected_idx) = self.state.selected_object {
+                                    // Save state to history before modification
+                                    let removed_object =
+                                        self.state.canvas.objects.remove(selected_idx);
+                                    self.state
+                                        .history
+                                        .save_remove_object(selected_idx, removed_object);
+                                    self.state.selected_object = None;
+                                    self.state.toasts.success("对象已删除!");
+                                }
+                            }
+                            if ui.button("置顶").clicked() {
+                                if let Some(selected_idx) = self.state.selected_object {
+                                    if selected_idx < self.state.canvas.objects.len() - 1 {
+                                        // Save state to history before modification
+                                        let object = self.state.canvas.objects.remove(selected_idx);
+                                        // Actually move the object to the top (end of the array)
+                                        self.state.canvas.objects.push(object);
+                                        self.state.history.save_add_object(
+                                            self.state.canvas.objects.len() - 1,
+                                            self.state.canvas.objects.last().unwrap().clone(),
+                                        );
+                                        self.state.selected_object =
+                                            Some(self.state.canvas.objects.len() - 1);
+                                        self.state.toasts.success("对象已移至顶部!");
+                                    }
+                                }
+                            }
+                            if ui.button("置底").clicked() {
+                                if let Some(selected_idx) = self.state.selected_object {
+                                    if selected_idx > 0 {
+                                        // Save state to history before modification
+                                        let object = self.state.canvas.objects.remove(selected_idx);
+                                        // Actually move the object to the bottom (beginning of the array)
+                                        self.state.canvas.objects.insert(0, object);
+                                        self.state.history.save_add_object(
+                                            0,
+                                            self.state.canvas.objects.first().unwrap().clone(),
+                                        );
+                                        self.state.selected_object = Some(0);
+                                        self.state.toasts.success("对象已移至底部!");
+                                    }
+                                }
+                            }
+                        });
+                    } else {
+                        ui.label(egui::RichText::new("(未选中对象)").italics());
+                    }
+                }
 
                 // 画笔相关设置
                 if self.state.current_tool == CanvasTool::Brush {
@@ -399,19 +707,18 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label("快捷颜色:");
                         for color in &self.state.persistent.quick_colors {
-                            let color_name = if color.r() == 255 && color.g() == 0 && color.b() == 0
-                            {
-                                "红"
-                            } else if color.r() == 255 && color.g() == 255 && color.b() == 0 {
-                                "黄"
-                            } else if color.r() == 0 && color.g() == 255 && color.b() == 0 {
-                                "绿"
-                            } else if color.r() == 0 && color.g() == 0 && color.b() == 255 {
-                                "蓝"
-                            } else if color.r() == 0 && color.g() == 0 && color.b() == 0 {
+                            let color_name = if color.r() == 0 && color.g() == 0 && color.b() == 0 {
                                 "黑"
                             } else if color.r() == 255 && color.g() == 255 && color.b() == 255 {
                                 "白"
+                            } else if color.r() == 0 && color.g() == 100 && color.b() == 255 {
+                                "蓝"
+                            } else if color.r() == 220 && color.g() == 20 && color.b() == 60 {
+                                "红"
+                            } else if color.r() == 34 && color.g() == 139 && color.b() == 34 {
+                                "绿"
+                            } else if color.r() == 255 && color.g() == 140 && color.b() == 0 {
+                                "橙"
                             } else {
                                 "自定义"
                             };
@@ -889,13 +1196,8 @@ impl App {
                                         if ui.button("重置").clicked() {
                                             self.state.show_quick_color_editor = false;
                                             // 重置为默认颜色
-                                            self.state.persistent.quick_colors = vec![
-                                                Color32::from_rgb(255, 0, 0),     // 红色
-                                                Color32::from_rgb(255, 255, 0),   // 黄色
-                                                Color32::from_rgb(0, 255, 0),     // 绿色
-                                                Color32::from_rgb(0, 0, 0),       // 黑色
-                                                Color32::from_rgb(255, 255, 255), // 白色
-                                            ]
+                                            self.state.persistent.quick_colors =
+                                                AppUtils::get_default_quick_colors();
                                         }
                                     });
                                 });
@@ -1164,6 +1466,11 @@ impl App {
                                 self.state.persistent = PersistentState::default();
                             }
                         });
+
+                        ui.horizontal(|ui| {
+                            ui.label("???:");
+                            ui.checkbox(&mut self.state.persistent.easter_egg_redo, "");
+                        });
                     });
                 }
 
@@ -1179,7 +1486,14 @@ impl App {
                             self.state.toasts.error("无法撤销，没有更多历史记录!");
                         }
                     }
-                    if ui.button("重做").clicked() {
+                    if ui
+                        .button(if !self.state.persistent.easter_egg_redo {
+                            "重做"
+                        } else {
+                            "Redo!"
+                        })
+                        .clicked()
+                    {
                         if self.state.history.redo(&mut self.state.canvas) {
                             self.state.toasts.success("成功重做操作!");
                         } else {
@@ -1314,37 +1628,6 @@ impl App {
                     painter.add(text_shape);
                 }
             }
-            // 绘制多点触控点
-
-            // 绘制调整大小和旋转锚点
-            if let Some(selected_idx) = self.state.selected_object {
-                if let Some(object) = self.state.canvas.objects.get(selected_idx) {
-                    let object_rect = match object {
-                        CanvasObject::Image(img) => egui::Rect::from_min_size(img.pos, img.size),
-                        CanvasObject::Text(text) => {
-                            let text_galley = painter.layout_no_wrap(
-                                text.text.clone(),
-                                egui::FontId::proportional(text.font_size),
-                                text.color,
-                            );
-                            let text_size = text_galley.size();
-                            egui::Rect::from_min_size(text.pos, text_size)
-                        }
-                        CanvasObject::Shape(shape) => AppUtils::calculate_shape_bounding_box(shape),
-                        CanvasObject::Stroke(_) => {
-                            // 笔画不支持调整大小和旋转
-                            return;
-                        }
-                    };
-
-                    AppUtils::draw_resize_and_rotation_anchors(
-                        &painter,
-                        object_rect,
-                        self.state.resize_anchor_hovered,
-                        self.state.rotation_anchor_hovered,
-                    );
-                }
-            }
 
             // 处理鼠标输入
             let pointer_pos = response.interact_pointer_pos();
@@ -1357,553 +1640,102 @@ impl App {
                 CanvasTool::Insert | CanvasTool::Settings => {}
 
                 CanvasTool::Select => {
-                    // if egui_wants_pointer {
-                    //     return;
-                    // }
-                    // 检测锚点悬停状态
-                    if let Some(pos) = pointer_pos {
-                        // 检查是否有对象被选中
-                        if let Some(selected_idx) = self.state.selected_object {
-                            // 获取选中对象的边界框
-                            let object_rect =
-                                if let Some(object) = self.state.canvas.objects.get(selected_idx) {
-                                    match object {
-                                        CanvasObject::Image(img) => {
-                                            Some(egui::Rect::from_min_size(img.pos, img.size))
-                                        }
-                                        CanvasObject::Text(text) => {
-                                            let text_galley = painter.layout_no_wrap(
-                                                text.text.clone(),
-                                                egui::FontId::proportional(text.font_size),
-                                                text.color,
-                                            );
-                                            let text_size = text_galley.size();
-                                            Some(egui::Rect::from_min_size(text.pos, text_size))
-                                        }
-                                        CanvasObject::Shape(shape) => {
-                                            Some(AppUtils::calculate_shape_bounding_box(shape))
-                                        }
-                                        CanvasObject::Stroke(_) => None, // 笔画不支持调整大小和旋转
-                                    }
-                                } else {
-                                    None
-                                };
+                    // Select tool: click to select objects, drag to move/resize selected object
 
-                            if let Some(rect) = object_rect {
-                                // 检查调整大小锚点悬停
-                                let resize_anchors = [
-                                    (ResizeAnchor::TopLeft, rect.left_top()),
-                                    (ResizeAnchor::TopRight, rect.right_top()),
-                                    (ResizeAnchor::BottomLeft, rect.left_bottom()),
-                                    (ResizeAnchor::BottomRight, rect.right_bottom()),
-                                    (ResizeAnchor::Top, Pos2::new(rect.center().x, rect.min.y)),
-                                    (ResizeAnchor::Bottom, Pos2::new(rect.center().x, rect.max.y)),
-                                    (ResizeAnchor::Left, Pos2::new(rect.min.x, rect.center().y)),
-                                    (ResizeAnchor::Right, Pos2::new(rect.max.x, rect.center().y)),
-                                ];
-
-                                let mut found_resize_anchor = None;
-                                for (anchor_type, anchor_pos) in resize_anchors {
-                                    if pos.distance(anchor_pos) <= 15.0 {
-                                        found_resize_anchor = Some(anchor_type);
-                                        break;
-                                    }
+                    // Handle click: iterate through objects from last to first, check bounding boxes
+                    if response.clicked() {
+                        if let Some(click_pos) = pointer_pos {
+                            // Iterate from last to first (top to bottom in z-order)
+                            let mut found_selection = false;
+                            for (i, object) in self.state.canvas.objects.iter().enumerate().rev() {
+                                if object.bounding_box().contains(click_pos) {
+                                    self.state.selected_object = Some(i);
+                                    found_selection = true;
+                                    break;
                                 }
-
-                                self.state.resize_anchor_hovered = found_resize_anchor;
-
-                                // 检查旋转锚点悬停
-                                let rotation_anchor_pos =
-                                    Pos2::new(rect.center().x, rect.min.y - 30.0);
-                                self.state.rotation_anchor_hovered =
-                                    pos.distance(rotation_anchor_pos) <= 15.0;
-                            } else {
-                                self.state.resize_anchor_hovered = None;
-                                self.state.rotation_anchor_hovered = false;
                             }
-                        } else {
-                            self.state.resize_anchor_hovered = None;
-                            self.state.rotation_anchor_hovered = false;
+
+                            // If no object was clicked, deselect
+                            if !found_selection {
+                                self.state.selected_object = None;
+                            }
                         }
-                    } else {
-                        self.state.resize_anchor_hovered = None;
-                        self.state.rotation_anchor_hovered = false;
                     }
 
+                    // Handle drag start: record the drag start position and check for resize handles
                     if response.drag_started() {
                         if let Some(pos) = pointer_pos {
                             self.state.drag_start_pos = Some(pos);
+                            self.state.dragged_handle = None;
 
-                            let mut hit = false;
-                            for object in &self.state.canvas.objects {
-                                if let CanvasObject::Image(img) = object {
-                                    if egui::Rect::from_min_size(img.pos, img.size).contains(pos) {
-                                        hit = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if !hit {
-                                for object in &self.state.canvas.objects {
-                                    if let CanvasObject::Stroke(stroke) = object {
-                                        let stroke_rect =
-                                            AppUtils::calculate_stroke_bounding_box(stroke);
-                                        if stroke_rect.contains(pos) {
-                                            hit = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            if !hit {
-                                self.state.selected_object = None;
-                            }
-
-                            // 如果已经有对象被选中，检查是否点击了锚点
+                            // Check if we're dragging a resize handle
                             if let Some(selected_idx) = self.state.selected_object {
                                 if let Some(object) = self.state.canvas.objects.get(selected_idx) {
-                                    let object_rect = match object {
-                                        CanvasObject::Image(img) => {
-                                            Some(egui::Rect::from_min_size(img.pos, img.size))
-                                        }
-                                        CanvasObject::Text(text) => {
-                                            let text_galley = painter.layout_no_wrap(
-                                                text.text.clone(),
-                                                egui::FontId::proportional(text.font_size),
-                                                text.color,
-                                            );
-                                            let text_size = text_galley.size();
-                                            Some(egui::Rect::from_min_size(text.pos, text_size))
-                                        }
-                                        CanvasObject::Shape(shape) => {
-                                            Some(AppUtils::calculate_shape_bounding_box(shape))
-                                        }
-                                        CanvasObject::Stroke(_) => None,
-                                    };
-
-                                    if let Some(rect) = object_rect {
-                                        // 检查是否点击了调整大小锚点
-                                        if let Some(anchor) = self.state.resize_anchor_hovered {
-                                            let aspect_ratio = match object {
-                                                CanvasObject::Image(img) => Some(img.aspect_ratio),
-                                                CanvasObject::Shape(_) => Some(1.0), // 形状保持等比例缩放
-                                                _ => None,
-                                            };
-
-                                            self.state.transform_operation =
-                                                Some(TransformOperation {
-                                                    operation_type: TransformOperationType::Resize,
-                                                    start_pos: pos,
-                                                    start_object_pos: rect.min,
-                                                    start_size: rect.size(),
-                                                    start_angle: 0.0,
-                                                    anchor: Some(anchor),
-                                                    center: rect.center(),
-                                                    aspect_ratio,
-                                                });
-                                        }
-                                        // 检查是否点击了旋转锚点
-                                        else if self.state.rotation_anchor_hovered {
-                                            let start_angle = match object {
-                                                CanvasObject::Shape(shape) => shape.rotation,
-                                                _ => 0.0,
-                                            };
-
-                                            self.state.transform_operation =
-                                                Some(TransformOperation {
-                                                    operation_type: TransformOperationType::Rotate,
-                                                    start_pos: pos,
-                                                    start_object_pos: rect.min,
-                                                    start_size: rect.size(),
-                                                    start_angle,
-                                                    anchor: None,
-                                                    center: rect.center(),
-                                                    aspect_ratio: None,
-                                                });
-                                        }
-                                        // 否则检查是否点击了对象本身（用于拖动）
-                                        else if rect.contains(pos) {
-                                            self.state.transform_operation =
-                                                Some(TransformOperation {
-                                                    operation_type: TransformOperationType::Move,
-                                                    start_pos: pos,
-                                                    start_object_pos: rect.min,
-                                                    start_size: rect.size(),
-                                                    start_angle: 0.0,
-                                                    anchor: None,
-                                                    center: rect.center(),
-                                                    aspect_ratio: None,
-                                                });
-                                        }
-                                        // 点击了非对象区域，取消选择
-                                        else {
-                                            self.state.selected_object = None;
-                                        }
-                                    }
-                                }
-                            }
-                            // 没有对象被选中，尝试选择新对象
-                            else {
-                                self.state.selected_object = None;
-
-                                // 检查所有对象
-                                for (i, object) in
-                                    self.state.canvas.objects.iter().enumerate().rev()
-                                {
-                                    match object {
-                                        CanvasObject::Image(img) => {
-                                            let img_rect =
-                                                egui::Rect::from_min_size(img.pos, img.size);
-                                            if img_rect.contains(pos) {
-                                                self.state.selected_object = Some(i);
-                                                break;
-                                            }
-                                        }
-                                        CanvasObject::Text(text) => {
-                                            let text_galley = painter.layout_no_wrap(
-                                                text.text.clone(),
-                                                egui::FontId::proportional(text.font_size),
-                                                text.color,
-                                            );
-                                            let text_size = text_galley.size();
-                                            let text_rect =
-                                                egui::Rect::from_min_size(text.pos, text_size);
-                                            if text_rect.contains(pos) {
-                                                self.state.selected_object = Some(i);
-                                                break;
-                                            }
-                                        }
-                                        CanvasObject::Shape(shape) => {
-                                            let shape_rect =
-                                                AppUtils::calculate_shape_bounding_box(shape);
-                                            if shape_rect.contains(pos) {
-                                                self.state.selected_object = Some(i);
-                                                break;
-                                            }
-                                        }
-                                        CanvasObject::Stroke(stroke) => {
-                                            if AppUtils::point_intersects_stroke(pos, stroke, 10.0)
-                                            {
-                                                self.state.selected_object = Some(i);
-                                                break;
-                                            }
-                                        }
+                                    let bbox = object.bounding_box();
+                                    if let Some(handle) =
+                                        AppUtils::get_transform_handle_at_pos(bbox, pos)
+                                    {
+                                        self.state.dragged_handle = Some(handle);
                                     }
                                 }
                             }
                         }
-                    } else if response.clicked() {
-                        // 处理点击事件 - 选择或取消选择对象
-                        if let Some(pos) = pointer_pos {
-                            let mut hit = false;
-                            let mut hit_object_index = None;
+                    }
 
-                            // 检查是否点击了任何对象
-                            for (i, object) in self.state.canvas.objects.iter().enumerate().rev() {
-                                match object {
-                                    CanvasObject::Image(img) => {
-                                        let img_rect = egui::Rect::from_min_size(img.pos, img.size);
-                                        if img_rect.contains(pos) {
-                                            hit = true;
-                                            hit_object_index = Some(i);
-                                            break;
-                                        }
-                                    }
-                                    CanvasObject::Text(text) => {
-                                        let text_galley = painter.layout_no_wrap(
-                                            text.text.clone(),
-                                            egui::FontId::proportional(text.font_size),
-                                            text.color,
-                                        );
-                                        let text_size = text_galley.size();
-                                        let text_rect =
-                                            egui::Rect::from_min_size(text.pos, text_size);
-                                        if text_rect.contains(pos) {
-                                            hit = true;
-                                            hit_object_index = Some(i);
-                                            break;
-                                        }
-                                    }
-                                    CanvasObject::Shape(shape) => {
-                                        let shape_rect =
-                                            AppUtils::calculate_shape_bounding_box(shape);
-                                        if shape_rect.contains(pos) {
-                                            hit = true;
-                                            hit_object_index = Some(i);
-                                            break;
-                                        }
-                                    }
-                                    CanvasObject::Stroke(stroke) => {
-                                        let stroke_rect =
-                                            AppUtils::calculate_stroke_bounding_box(stroke);
-                                        if stroke_rect.contains(pos) {
-                                            hit = true;
-                                            hit_object_index = Some(i);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
+                    // Handle dragging: move or resize the selected object
+                    if response.dragged() && self.state.selected_object.is_some() {
+                        if let (Some(drag_start), Some(current_pos)) =
+                            (self.state.drag_start_pos, pointer_pos)
+                        {
+                            let delta = current_pos - drag_start;
 
-                            // 如果点击了对象，选择它；如果点击了空白区域，取消选择
-                            if hit {
-                                self.state.selected_object = hit_object_index;
-                            } else {
-                                self.state.selected_object = None;
-                            }
-                        }
-                    } else if response.dragged() {
-                        if let Some(pos) = pointer_pos {
-                            // 处理变换操作
-                            if let Some(transform_op) = self.state.transform_operation {
-                                if let Some(selected_idx) = self.state.selected_object {
-                                    // Save state to history before modification
-                                    self.state.history.save_state(&self.state.canvas);
+                            if let Some(selected_idx) = self.state.selected_object {
+                                if let Some(dragged_handle) = self.state.dragged_handle {
+                                    // Resize operation - save state before modification
+                                    let old_object =
+                                        self.state.canvas.objects[selected_idx].clone();
                                     if let Some(object) =
                                         self.state.canvas.objects.get_mut(selected_idx)
                                     {
-                                        match transform_op.operation_type {
-                                            TransformOperationType::Move => {
-                                                let delta = pos - transform_op.start_pos;
-                                                self.state
-                                                    .transform_operation
-                                                    .as_mut()
-                                                    .unwrap()
-                                                    .start_pos = pos;
-
-                                                match object {
-                                                    CanvasObject::Image(img) => {
-                                                        img.pos += delta;
-                                                    }
-                                                    CanvasObject::Stroke(stroke) => {
-                                                        for p in &mut stroke.points {
-                                                            *p += delta;
-                                                        }
-                                                    }
-                                                    CanvasObject::Text(text) => {
-                                                        text.pos += delta;
-                                                    }
-                                                    CanvasObject::Shape(shape) => {
-                                                        shape.pos += delta;
-                                                    }
-                                                }
-                                            }
-                                            TransformOperationType::Resize => {
-                                                if let Some(anchor) = transform_op.anchor {
-                                                    let delta = pos - transform_op.start_pos;
-
-                                                    match object {
-                                                        CanvasObject::Image(img) => {
-                                                            let mut new_size =
-                                                                transform_op.start_size;
-                                                            let mut new_pos =
-                                                                transform_op.start_object_pos;
-
-                                                            // 根据锚点类型调整大小和位置
-                                                            match anchor {
-                                                                ResizeAnchor::TopLeft => {
-                                                                    new_size.x =
-                                                                        (transform_op.start_size.x
-                                                                            - delta.x)
-                                                                            .max(20.0);
-                                                                    new_size.y =
-                                                                        (transform_op.start_size.y
-                                                                            - delta.y)
-                                                                            .max(20.0);
-                                                                    new_pos.x = transform_op
-                                                                        .start_object_pos
-                                                                        .x
-                                                                        + delta.x;
-                                                                    new_pos.y = transform_op
-                                                                        .start_object_pos
-                                                                        .y
-                                                                        + delta.y;
-                                                                }
-                                                                ResizeAnchor::TopRight => {
-                                                                    new_size.x =
-                                                                        (transform_op.start_size.x
-                                                                            + delta.x)
-                                                                            .max(20.0);
-                                                                    new_size.y =
-                                                                        (transform_op.start_size.y
-                                                                            - delta.y)
-                                                                            .max(20.0);
-                                                                    new_pos.y = transform_op
-                                                                        .start_object_pos
-                                                                        .y
-                                                                        + delta.y;
-                                                                }
-                                                                ResizeAnchor::BottomLeft => {
-                                                                    new_size.x =
-                                                                        (transform_op.start_size.x
-                                                                            - delta.x)
-                                                                            .max(20.0);
-                                                                    new_size.y =
-                                                                        (transform_op.start_size.y
-                                                                            + delta.y)
-                                                                            .max(20.0);
-                                                                    new_pos.x = transform_op
-                                                                        .start_object_pos
-                                                                        .x
-                                                                        + delta.x;
-                                                                }
-                                                                ResizeAnchor::BottomRight => {
-                                                                    new_size.x =
-                                                                        (transform_op.start_size.x
-                                                                            + delta.x)
-                                                                            .max(20.0);
-                                                                    new_size.y =
-                                                                        (transform_op.start_size.y
-                                                                            + delta.y)
-                                                                            .max(20.0);
-                                                                }
-                                                                ResizeAnchor::Top => {
-                                                                    new_size.y =
-                                                                        (transform_op.start_size.y
-                                                                            - delta.y)
-                                                                            .max(20.0);
-                                                                    new_pos.y = transform_op
-                                                                        .start_object_pos
-                                                                        .y
-                                                                        + delta.y;
-                                                                }
-                                                                ResizeAnchor::Bottom => {
-                                                                    new_size.y =
-                                                                        (transform_op.start_size.y
-                                                                            + delta.y)
-                                                                            .max(20.0);
-                                                                }
-                                                                ResizeAnchor::Left => {
-                                                                    new_size.x =
-                                                                        (transform_op.start_size.x
-                                                                            - delta.x)
-                                                                            .max(20.0);
-                                                                    new_pos.x = transform_op
-                                                                        .start_object_pos
-                                                                        .x
-                                                                        + delta.x;
-                                                                }
-                                                                ResizeAnchor::Right => {
-                                                                    new_size.x =
-                                                                        (transform_op.start_size.x
-                                                                            + delta.x)
-                                                                            .max(20.0);
-                                                                }
-                                                            }
-
-                                                            // 保持纵横比
-                                                            if let Some(aspect_ratio) =
-                                                                transform_op.aspect_ratio
-                                                            {
-                                                                if aspect_ratio > 0.0 {
-                                                                    let target_aspect =
-                                                                        aspect_ratio;
-                                                                    let current_aspect =
-                                                                        new_size.x / new_size.y;
-
-                                                                    if current_aspect.abs() > 0.01 {
-                                                                        if current_aspect
-                                                                            > target_aspect
-                                                                        {
-                                                                            // 太宽，调整宽度
-                                                                            new_size.x = new_size.y
-                                                                                * target_aspect;
-                                                                        } else {
-                                                                            // 太高，调整高度
-                                                                            new_size.y = new_size.x
-                                                                                / target_aspect;
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-
-                                                            img.pos = new_pos;
-                                                            img.size = new_size;
-                                                        }
-                                                        CanvasObject::Text(text) => {
-                                                            // 文本调整大小比较复杂，暂时只支持移动
-                                                            // 可以考虑调整字体大小
-                                                            match anchor {
-                                                                ResizeAnchor::TopLeft
-                                                                | ResizeAnchor::BottomRight => {
-                                                                    text.font_size =
-                                                                        (transform_op.start_size.x
-                                                                            + delta.x)
-                                                                            .max(8.0);
-                                                                }
-                                                                _ => {}
-                                                            }
-                                                        }
-                                                        CanvasObject::Shape(shape) => {
-                                                            match anchor {
-                                                                ResizeAnchor::TopLeft
-                                                                | ResizeAnchor::BottomRight => {
-                                                                    shape.size =
-                                                                        (transform_op.start_size.x
-                                                                            + delta.x)
-                                                                            .max(10.0);
-                                                                }
-                                                                ResizeAnchor::TopRight
-                                                                | ResizeAnchor::BottomLeft => {
-                                                                    shape.size =
-                                                                        (transform_op.start_size.x
-                                                                            - delta.x)
-                                                                            .max(10.0);
-                                                                }
-                                                                ResizeAnchor::Top
-                                                                | ResizeAnchor::Bottom => {
-                                                                    shape.size =
-                                                                        (transform_op.start_size.y
-                                                                            + delta.y)
-                                                                            .max(10.0);
-                                                                }
-                                                                ResizeAnchor::Left
-                                                                | ResizeAnchor::Right => {
-                                                                    shape.size =
-                                                                        (transform_op.start_size.x
-                                                                            + delta.x)
-                                                                            .max(10.0);
-                                                                }
-                                                            }
-                                                        }
-                                                        CanvasObject::Stroke(_) => {}
-                                                    }
-                                                }
-                                            }
-                                            TransformOperationType::Rotate => {
-                                                // 计算当前角度
-                                                let center = transform_op.center;
-                                                let current_dir = pos - center;
-                                                let start_dir = transform_op.start_pos - center;
-
-                                                let current_angle =
-                                                    current_dir.y.atan2(current_dir.x);
-                                                let start_angle = start_dir.y.atan2(start_dir.x);
-
-                                                let angle_delta = current_angle - start_angle;
-
-                                                match object {
-                                                    CanvasObject::Shape(shape) => {
-                                                        shape.rotation =
-                                                            transform_op.start_angle + angle_delta;
-                                                    }
-                                                    CanvasObject::Image(img) => {
-                                                        // 图片旋转需要更复杂的逻辑，暂时不支持
-                                                    }
-                                                    _ => {
-                                                        // 其他对象类型暂时不支持旋转
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        Self::resize_object(
+                                            object,
+                                            dragged_handle,
+                                            delta,
+                                            drag_start,
+                                            current_pos,
+                                        );
                                     }
+                                    self.state.history.save_modify_object(
+                                        selected_idx,
+                                        old_object,
+                                        self.state.canvas.objects[selected_idx].clone(),
+                                    );
+                                } else {
+                                    // Move operation - save state before modification
+                                    let old_object =
+                                        self.state.canvas.objects[selected_idx].clone();
+                                    if let Some(object) =
+                                        self.state.canvas.objects.get_mut(selected_idx)
+                                    {
+                                        Self::move_object(object, delta);
+                                    }
+                                    self.state.history.save_modify_object(
+                                        selected_idx,
+                                        old_object,
+                                        self.state.canvas.objects[selected_idx].clone(),
+                                    );
                                 }
                             }
+
+                            // Update drag start position for continuous dragging
+                            self.state.drag_start_pos = Some(current_pos);
                         }
-                    } else if response.drag_stopped() {
-                        // 结束变换操作
-                        self.state.transform_operation = None;
+                    }
+
+                    // Handle drag stop: clear drag state
+                    if response.drag_stopped() {
                         self.state.drag_start_pos = None;
+                        self.state.dragged_handle = None;
                     }
                 }
 
@@ -1943,8 +1775,7 @@ impl App {
                                         }
                                     }
                                     CanvasObject::Shape(shape) => {
-                                        let shape_rect =
-                                            AppUtils::calculate_shape_bounding_box(shape);
+                                        let shape_rect = shape.bounding_box();
                                         if shape_rect.contains(pos) {
                                             to_remove.push(i);
                                         }

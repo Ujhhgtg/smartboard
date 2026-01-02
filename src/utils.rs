@@ -1,8 +1,6 @@
 use egui::{Color32, Painter, Pos2, Stroke};
 use image::{DynamicImage, GenericImageView};
 
-use crate::state::ResizeAnchor;
-
 pub struct AppUtils;
 
 impl AppUtils {
@@ -403,75 +401,6 @@ impl AppUtils {
     //     vec![start, end]
     // }
 
-    // 计算形状的边界框（用于选择和碰撞检测）
-    pub fn calculate_shape_bounding_box(shape: &crate::state::CanvasShape) -> egui::Rect {
-        match shape.shape_type {
-            crate::state::CanvasShapeType::Line => {
-                let end_point = Pos2::new(shape.pos.x + shape.size, shape.pos.y);
-                let min_x = shape.pos.x.min(end_point.x) - 5.0;
-                let max_x = shape.pos.x.max(end_point.x) + 5.0;
-                let min_y = shape.pos.y.min(end_point.y) - 5.0;
-                let max_y = shape.pos.y.max(end_point.y) + 5.0;
-                egui::Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y))
-            }
-            crate::state::CanvasShapeType::Arrow => {
-                let end_point = Pos2::new(shape.pos.x + shape.size, shape.pos.y);
-                let min_x = shape.pos.x.min(end_point.x) - 5.0;
-                let max_x = shape.pos.x.max(end_point.x) + 5.0;
-                let min_y = shape.pos.y.min(end_point.y) - 15.0;
-                let max_y = shape.pos.y.max(end_point.y) + 15.0;
-                egui::Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y))
-            }
-            crate::state::CanvasShapeType::Rectangle => {
-                egui::Rect::from_min_size(shape.pos, egui::vec2(shape.size, shape.size))
-            }
-            crate::state::CanvasShapeType::Triangle => {
-                let half_size = shape.size / 2.0;
-                let min_x = shape.pos.x - 5.0;
-                let max_x = shape.pos.x + shape.size + 5.0;
-                let min_y = shape.pos.y - 5.0;
-                let max_y = shape.pos.y + half_size + 5.0;
-                egui::Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y))
-            }
-            crate::state::CanvasShapeType::Circle => {
-                let radius = shape.size / 2.0;
-                egui::Rect::from_min_max(
-                    Pos2::new(shape.pos.x - radius - 5.0, shape.pos.y - radius - 5.0),
-                    Pos2::new(shape.pos.x + radius + 5.0, shape.pos.y + radius + 5.0),
-                )
-            }
-        }
-    }
-
-    // 计算笔画的边界框（用于选择和碰撞检测）
-    pub fn calculate_stroke_bounding_box(stroke: &crate::state::CanvasStroke) -> egui::Rect {
-        if stroke.points.is_empty() {
-            return egui::Rect::from_min_max(Pos2::ZERO, Pos2::ZERO);
-        }
-
-        // 计算所有点的最小和最大坐标
-        let mut min_x = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut min_y = f32::INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
-
-        for point in &stroke.points {
-            min_x = min_x.min(point.x);
-            max_x = max_x.max(point.x);
-            min_y = min_y.min(point.y);
-            max_y = max_y.max(point.y);
-        }
-
-        // 考虑笔画宽度，添加一些边距
-        let max_width = stroke.widths.iter().copied().fold(0.0, f32::max);
-        let padding = max_width / 2.0 + 5.0; // 添加额外的5像素边距
-
-        egui::Rect::from_min_max(
-            Pos2::new(min_x - padding, min_y - padding),
-            Pos2::new(max_x + padding, max_y + padding),
-        )
-    }
-
     pub fn draw_size_preview(painter: &Painter, pos: Pos2, size: f32) -> () {
         const SIZE_PREVIEW_BORDER_WIDTH: f32 = 2.0;
         let radius = size / SIZE_PREVIEW_BORDER_WIDTH;
@@ -483,87 +412,9 @@ impl AppUtils {
         );
     }
 
-    pub fn draw_resize_and_rotation_anchors(
-        painter: &egui::Painter,
-        object_rect: egui::Rect,
-        resize_anchor_hovered: Option<ResizeAnchor>,
-        rotation_anchor_hovered: bool,
-    ) {
-        const ANCHOR_SIZE: f32 = 10.0;
-        const ROTATION_ANCHOR_DISTANCE: f32 = 30.0;
-
-        // 绘制调整大小锚点
-        let anchors = [
-            (ResizeAnchor::TopLeft, object_rect.left_top()),
-            (ResizeAnchor::TopRight, object_rect.right_top()),
-            (ResizeAnchor::BottomLeft, object_rect.left_bottom()),
-            (ResizeAnchor::BottomRight, object_rect.right_bottom()),
-            (
-                ResizeAnchor::Top,
-                Pos2::new(object_rect.center().x, object_rect.min.y),
-            ),
-            (
-                ResizeAnchor::Bottom,
-                Pos2::new(object_rect.center().x, object_rect.max.y),
-            ),
-            (
-                ResizeAnchor::Left,
-                Pos2::new(object_rect.min.x, object_rect.center().y),
-            ),
-            (
-                ResizeAnchor::Right,
-                Pos2::new(object_rect.max.x, object_rect.center().y),
-            ),
-        ];
-
-        for (anchor_type, pos) in anchors {
-            // 绘制锚点
-            let anchor_color = if let Some(hovered_anchor) = resize_anchor_hovered {
-                if hovered_anchor == anchor_type {
-                    Color32::YELLOW
-                } else {
-                    Color32::WHITE
-                }
-            } else {
-                Color32::WHITE
-            };
-
-            painter.circle_filled(pos, ANCHOR_SIZE, anchor_color);
-            painter.circle_stroke(pos, ANCHOR_SIZE, Stroke::new(2.0, Color32::BLACK));
-        }
-
-        // 绘制旋转锚点（在顶部中间锚点上方）
-        let rotation_anchor_pos = Pos2::new(
-            object_rect.center().x,
-            object_rect.min.y - ROTATION_ANCHOR_DISTANCE,
-        );
-
-        let rotation_color = if rotation_anchor_hovered {
-            Color32::YELLOW
-        } else {
-            Color32::WHITE
-        };
-
-        painter.circle_filled(rotation_anchor_pos, ANCHOR_SIZE, rotation_color);
-        painter.circle_stroke(
-            rotation_anchor_pos,
-            ANCHOR_SIZE,
-            Stroke::new(2.0, Color32::BLACK),
-        );
-
-        // 绘制连接线
-        painter.line_segment(
-            [object_rect.center_top(), rotation_anchor_pos],
-            Stroke::new(2.0, Color32::WHITE),
-        );
-    }
-
-    /// 将图像调整大小以适应最大纹理大小限制
-    /// 最大纹理大小通常为 2048x2048，如果图像超过此限制，将其缩放以适应
-    pub fn resize_image_for_texture(
-        image: DynamicImage,
-        max_texture_size: u32,
-    ) -> DynamicImage {
+    // 将图像调整大小以适应最大纹理大小限制
+    // 最大纹理大小通常为 2048x2048，如果图像超过此限制，将其缩放以适应
+    pub fn resize_image_for_texture(image: DynamicImage, max_texture_size: u32) -> DynamicImage {
         let (width, height) = image.dimensions();
 
         // 如果图像已经在限制内，直接返回
@@ -584,10 +435,133 @@ impl AppUtils {
         let new_height = new_height.max(1);
 
         // 使用高质量缩放算法调整图像大小
-        image.resize_exact(
-            new_width,
-            new_height,
-            image::imageops::FilterType::Lanczos3,
-        )
+        image.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
+    }
+
+    pub fn get_default_quick_colors() -> Vec<egui::Color32> {
+        vec![
+            Color32::from_rgb(0, 0, 0),       // 黑色 - Primary text and outlines
+            Color32::from_rgb(255, 255, 255), // 白色 - Highlighting and backgrounds
+            Color32::from_rgb(0, 100, 255),   // 蓝色 - Diagrams and important information
+            Color32::from_rgb(220, 20, 60),   // 红色 - Corrections and emphasis
+            Color32::from_rgb(34, 139, 34),   // 绿色 - Positive feedback
+            Color32::from_rgb(255, 140, 0),   // 橙色 - Secondary highlighting
+        ]
+    }
+
+    // 绘制调整句柄
+    pub fn draw_resize_handles(painter: &egui::Painter, bbox: egui::Rect) {
+        let handle_size = 12.0;
+        let handle_stroke = Stroke::new(1.0, Color32::WHITE);
+        let handle_fill = Color32::BLUE;
+
+        // 8个调整大小的句柄
+        let handles = [
+            (bbox.left_top(), crate::state::TransformHandle::TopLeft),
+            (bbox.right_top(), crate::state::TransformHandle::TopRight),
+            (
+                bbox.left_bottom(),
+                crate::state::TransformHandle::BottomLeft,
+            ),
+            (
+                bbox.right_bottom(),
+                crate::state::TransformHandle::BottomRight,
+            ),
+            (
+                Pos2::new(bbox.center().x, bbox.top()),
+                crate::state::TransformHandle::Top,
+            ),
+            (
+                Pos2::new(bbox.center().x, bbox.bottom()),
+                crate::state::TransformHandle::Bottom,
+            ),
+            (
+                Pos2::new(bbox.left(), bbox.center().y),
+                crate::state::TransformHandle::Left,
+            ),
+            (
+                Pos2::new(bbox.right(), bbox.center().y),
+                crate::state::TransformHandle::Right,
+            ),
+        ];
+
+        for (pos, _) in &handles {
+            let handle_rect =
+                egui::Rect::from_center_size(*pos, egui::vec2(handle_size, handle_size));
+            painter.rect_filled(handle_rect, 0.0, handle_fill);
+            painter.rect_stroke(handle_rect, 0.0, handle_stroke, egui::StrokeKind::Outside);
+        }
+
+        // 旋转句柄（在顶部稍微上方）
+        let rotate_pos = Pos2::new(bbox.center().x, bbox.top() - 20.0);
+        let rotate_handle_rect =
+            egui::Rect::from_center_size(rotate_pos, egui::vec2(handle_size, handle_size));
+        painter.circle_filled(rotate_pos, handle_size / 2.0, handle_fill);
+        painter.circle_stroke(rotate_pos, handle_size / 2.0, handle_stroke);
+
+        // 绘制旋转指示线
+        painter.line_segment(
+            [bbox.center_top(), rotate_pos],
+            Stroke::new(1.0, Color32::GRAY),
+        );
+    }
+
+    // 获取鼠标位置下的调整句柄
+    pub fn get_transform_handle_at_pos(
+        bbox: egui::Rect,
+        pos: Pos2,
+    ) -> Option<crate::state::TransformHandle> {
+        let handle_size = 20.0;
+        let handle_hit_size = handle_size * 1.5; // 扩大点击区域
+
+        // 检查 8 个调整大小的句柄
+        let handles = [
+            (bbox.left_top(), crate::state::TransformHandle::TopLeft),
+            (bbox.right_top(), crate::state::TransformHandle::TopRight),
+            (
+                bbox.left_bottom(),
+                crate::state::TransformHandle::BottomLeft,
+            ),
+            (
+                bbox.right_bottom(),
+                crate::state::TransformHandle::BottomRight,
+            ),
+            (
+                Pos2::new(bbox.center().x, bbox.top()),
+                crate::state::TransformHandle::Top,
+            ),
+            (
+                Pos2::new(bbox.center().x, bbox.bottom()),
+                crate::state::TransformHandle::Bottom,
+            ),
+            (
+                Pos2::new(bbox.left(), bbox.center().y),
+                crate::state::TransformHandle::Left,
+            ),
+            (
+                Pos2::new(bbox.right(), bbox.center().y),
+                crate::state::TransformHandle::Right,
+            ),
+        ];
+
+        for (handle_pos, handle_type) in &handles {
+            let handle_rect = egui::Rect::from_center_size(
+                *handle_pos,
+                egui::vec2(handle_hit_size, handle_hit_size),
+            );
+            if handle_rect.contains(pos) {
+                return Some(*handle_type);
+            }
+        }
+
+        // 检查旋转句柄
+        let rotate_pos = Pos2::new(bbox.center().x, bbox.top() - 20.0);
+        let rotate_rect =
+            egui::Rect::from_center_size(rotate_pos, egui::vec2(handle_hit_size, handle_hit_size));
+        if rotate_rect.contains(pos) {
+            return Some(crate::state::TransformHandle::Rotate);
+        }
+
+        None
     }
 }
