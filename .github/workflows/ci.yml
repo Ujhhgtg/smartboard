@@ -9,15 +9,32 @@ on:
 
 jobs:
   build:
-    name: build (${{ matrix.os }})
+    name: build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
+        include:
+          # ---------- Linux ----------
+          - name: linux-x86_64
+            os: ubuntu-latest
+            arch: x86_64
+
+          # ---------- Windows ----------
+          - name: windows-x86_64
+            os: windows-latest
+            arch: x86_64
+
+          # ---------- macOS Intel ----------
+          - name: macos-x86_64
+            os: macos-13
+            arch: x86_64
+
+          # ---------- macOS Apple Silicon ----------
+          - name: macos-aarch64
+            os: macos-latest
+            arch: aarch64
 
     steps:
       - name: Checkout repository
@@ -34,18 +51,21 @@ jobs:
       - name: Cache build dir
         uses: actions/cache@v5
         with:
-          path: |
-            target
-          key: |
-            cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          path: target
+          key: cargo-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-${{ runner.os }}-${{ matrix.arch }}-
 
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt update
           sudo apt install -y mold libasound2-dev pkg-config
+
+      - name: Install system dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew update
 
       - name: Build (debug)
         run: cargo build --verbose
@@ -56,13 +76,13 @@ jobs:
       - name: Upload debug artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: debug-${{ matrix.os }}
+          name: debug-${{ matrix.name }}
           path: target/debug/smartboard*
           if-no-files-found: error
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: release-${{ matrix.os }}
+          name: release-${{ matrix.name }}
           path: target/release/smartboard*
           if-no-files-found: error

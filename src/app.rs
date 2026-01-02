@@ -967,7 +967,7 @@ impl App {
                             let present_mode_changed = ui
                                 .selectable_value(
                                     &mut self.state.persistent.present_mode,
-                                    crate::state::WGPU_PRESENTMODE_AUTOVSYNC,
+                                    PresentMode::AutoVsync,
                                     "开 (自动) | AutoVsync",
                                 )
                                 .changed()
