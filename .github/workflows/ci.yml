@@ -57,12 +57,12 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: debug-${{ matrix.os }}
-          path: target/debug/
+          path: target/debug/smartboard*
           if-no-files-found: error
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.os }}
-          path: target/release/
+          path: target/release/smartboard*
           if-no-files-found: error
