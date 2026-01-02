@@ -23,38 +23,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------------------------
-      # Install Rust nightly
-      # ---------------------------
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt, clippy
 
-      # ---------------------------
-      # Install mold (Linux only)
-      # ---------------------------
+      - name: Install codegen
+        if: matrix.os == 'ubuntu-latest'
+        run: rustup component add rustc-codegen-cranelift-preview --toolchain nightly
+
       - name: Install mold (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold
+          sudo apt update
+          sudo apt install -y mold
 
-      # ---------------------------
-      # Build debug
-      # ---------------------------
       - name: Build (debug)
         run: cargo build --verbose
 
-      # ---------------------------
-      # Build release
-      # ---------------------------
       - name: Build (release)
         run: cargo build --release --verbose
 
-      # ---------------------------
-      # Upload artifacts
-      # ---------------------------
       - name: Upload debug artifacts
         uses: actions/upload-artifact@v4
         with:
