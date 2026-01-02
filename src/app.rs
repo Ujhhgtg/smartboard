@@ -515,7 +515,7 @@ impl App {
 
                                     self.state.canvas.objects.push(CanvasObject::Image(
                                         CanvasImage {
-                                            texture_id: texture.id(),
+                                            texture: texture,
                                             pos: Pos2::new(100.0, 100.0),
                                             size: egui::vec2(target_width, target_height),
                                             aspect_ratio,
@@ -761,6 +761,18 @@ impl App {
                         });
 
                         ui.horizontal(|ui| {
+                            ui.label("直线停留拉直:");
+                            ui.checkbox(&mut self.state.persistent.stroke_straightening, "启用");
+                            if self.state.persistent.stroke_straightening {
+                                ui.add(egui::Slider::new(
+                                    &mut self.state.persistent.stroke_straightening_tolerance,
+                                    1.0..=50.0,
+                                ));
+                                ui.label("灵敏度");
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
                             ui.label("插值频率:");
                             ui.add(egui::Slider::new(
                                 &mut self.state.persistent.interpolation_frequency,
@@ -835,10 +847,12 @@ impl App {
                                             self.state.show_quick_color_editor = false;
                                             // 重置为默认颜色
                                             self.state.persistent.quick_colors = vec![
-                                                Color32::from_rgb(255, 0, 0),   // 红色
-                                                Color32::from_rgb(255, 255, 0), // 黄色
-                                                Color32::from_rgb(0, 255, 0),   // 绿色
-                                            ];
+                                                Color32::from_rgb(255, 0, 0),     // 红色
+                                                Color32::from_rgb(255, 255, 0),   // 黄色
+                                                Color32::from_rgb(0, 255, 0),     // 绿色
+                                                Color32::from_rgb(0, 0, 0),       // 黑色
+                                                Color32::from_rgb(255, 255, 255), // 白色
+                                            ]
                                         }
                                     });
                                 });
@@ -2043,34 +2057,40 @@ impl App {
                             {
                                 let current_time = active_stroke.start_time.elapsed().as_secs_f64();
 
-                                // 检查是否停留超过 0.5 秒
-                                let time_since_last_movement =
-                                    active_stroke.last_movement_time.elapsed().as_secs_f32();
-                                if time_since_last_movement > 0.5 && active_stroke.points.len() >= 2
-                                {
-                                    // 拉直笔画
-                                    let straightened_points =
-                                        AppUtils::straighten_stroke(&active_stroke.points);
+                                if self.state.persistent.stroke_straightening {
+                                    // 检查是否停留超过 0.5 秒
+                                    let time_since_last_movement =
+                                        active_stroke.last_movement_time.elapsed().as_secs_f32();
+                                    if time_since_last_movement > 0.5
+                                        && active_stroke.points.len() >= 2
+                                    {
+                                        // 拉直笔画
+                                        let straightened_points = AppUtils::straighten_stroke(
+                                            &active_stroke.points,
+                                            self.state.persistent.stroke_straightening_tolerance,
+                                        );
 
-                                    // 只有在点数量实际改变时才更新宽度数组
-                                    if straightened_points.len() != active_stroke.points.len() {
-                                        active_stroke.points = straightened_points;
+                                        // 只有在点数量实际改变时才更新宽度数组
+                                        if straightened_points.len() != active_stroke.points.len() {
+                                            active_stroke.points = straightened_points;
 
-                                        // 更新宽度数组以匹配新的点数量
-                                        if !active_stroke.widths.is_empty() {
-                                            let first_width = active_stroke.widths[0];
-                                            let last_width = *active_stroke.widths.last().unwrap();
-                                            active_stroke.widths =
-                                                if active_stroke.points.len() == 1 {
-                                                    vec![first_width]
-                                                } else {
-                                                    vec![first_width, last_width]
-                                                };
+                                            // 更新宽度数组以匹配新的点数量
+                                            if !active_stroke.widths.is_empty() {
+                                                let first_width = active_stroke.widths[0];
+                                                let last_width =
+                                                    *active_stroke.widths.last().unwrap();
+                                                active_stroke.widths =
+                                                    if active_stroke.points.len() == 1 {
+                                                        vec![first_width]
+                                                    } else {
+                                                        vec![first_width, last_width]
+                                                    };
+                                            }
                                         }
-                                    }
 
-                                    // 更新最后移动时间
-                                    active_stroke.last_movement_time = Instant::now();
+                                        // 更新最后移动时间
+                                        active_stroke.last_movement_time = Instant::now();
+                                    }
                                 }
 
                                 if active_stroke.points.is_empty()
