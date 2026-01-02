@@ -5,10 +5,15 @@ mod render;
 mod state;
 mod utils;
 
+use std::backtrace::Backtrace;
+
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
+        eprintln!("panic: {info}");
+        eprintln!("backtrace:\n{}", Backtrace::force_capture());
+
         rfd::MessageDialog::new()
             .set_title("Application Panic")
             .set_level(rfd::MessageLevel::Error)
