@@ -262,6 +262,148 @@ impl AppUtils {
         final_points
     }
 
+    // 判断笔画是否近似一条直线
+    pub fn is_stroke_linear(points: &[Pos2], tolerance: f32) -> bool {
+        if points.len() < 3 {
+            return true;
+        }
+
+        let a = points[0];
+        let b = points[points.len() - 1];
+
+        let ab = b - a;
+        let ab_len = ab.length();
+
+        // 起终点重合，无法定义直线
+        if ab_len < f32::EPSILON {
+            return false;
+        }
+
+        let mut max_dist: f32 = 0.0;
+
+        for &p in &points[1..points.len() - 1] {
+            let ap = p - a;
+            // 2D 叉积的“模”
+            let cross = ab.x * ap.y - ab.y * ap.x;
+            let dist = cross.abs() / ab_len;
+            max_dist = max_dist.max(dist);
+
+            if max_dist > tolerance {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    // 拉直笔画
+    pub fn straighten_stroke(points: &[Pos2]) -> Vec<Pos2> {
+        const LINE_TOLERANCE: f32 = 20.0; // 可调：像素级
+
+        if Self::is_stroke_linear(points, LINE_TOLERANCE) {
+            match points.len() {
+                0 => Vec::new(),
+                1 => vec![points[0]],
+                _ => vec![points[0], points[points.len() - 1]],
+            }
+        } else {
+            points.to_vec()
+        }
+    }
+
+    // pub fn pca_linearity(points: &[Pos2]) -> Option<(f32, Pos2)> {
+    //     if points.len() < 2 {
+    //         return None;
+    //     }
+
+    //     // 1. Centroid
+    //     let mut mean = Pos2::ZERO;
+    //     for p in points {
+    //         mean.x += p.x;
+    //         mean.y += p.y;
+    //     }
+    //     mean.x /= points.len() as f32;
+    //     mean.y /= points.len() as f32;
+
+    //     // 2. Covariance
+    //     let mut xx = 0.0;
+    //     let mut yy = 0.0;
+    //     let mut xy = 0.0;
+
+    //     for p in points {
+    //         let dx = p.x - mean.x;
+    //         let dy = p.y - mean.y;
+    //         xx += dx * dx;
+    //         yy += dy * dy;
+    //         xy += dx * dy;
+    //     }
+
+    //     let n = points.len() as f32;
+    //     xx /= n;
+    //     yy /= n;
+    //     xy /= n;
+
+    //     // 3. Eigenvalues of 2x2 matrix
+    //     let trace = xx + yy;
+    //     let det = xx * yy - xy * xy;
+    //     let disc = (trace * trace - 4.0 * det).sqrt();
+
+    //     let lambda1 = (trace + disc) * 0.5;
+    //     let lambda2 = (trace - disc) * 0.5;
+
+    //     if lambda1 <= 0.0 {
+    //         return None;
+    //     }
+
+    //     // 4. Principal direction (eigenvector of lambda1)
+    //     let dir = if xy.abs() > 1e-6 {
+    //         let v = Pos2::new(lambda1 - yy, xy);
+    //         let len = (v.x * v.x + v.y * v.y).sqrt();
+    //         Pos2::new(v.x / len, v.y / len)
+    //     } else if xx >= yy {
+    //         Pos2::new(1.0, 0.0)
+    //     } else {
+    //         Pos2::new(0.0, 1.0)
+    //     };
+
+    //     let linearity = lambda1 / (lambda1 + lambda2);
+    //     Some((linearity, dir))
+    // }
+
+    // pub fn straighten_if_linear(points: &[Pos2]) -> Vec<Pos2> {
+    //     if points.len() < 2 {
+    //         return points.to_vec();
+    //     }
+
+    //     let Some((linearity, dir)) = Self::pca_linearity(points) else {
+    //         return points.to_vec();
+    //     };
+
+    //     const THRESHOLD: f32 = 0.9;
+    //     if linearity < THRESHOLD {
+    //         // Not straight enough — keep original stroke
+    //         return points.to_vec();
+    //     }
+
+    //     // Project endpoints onto the principal axis
+    //     let origin = points[0];
+    //     let mut min_t: f32 = 0.0;
+    //     let mut max_t: f32 = 0.0;
+
+    //     for p in points {
+    //         let dx = p.x - origin.x;
+    //         let dy = p.y - origin.y;
+    //         let t = dx * dir.x + dy * dir.y;
+    //         min_t = min_t.min(t);
+    //         max_t = max_t.max(t);
+    //     }
+
+    //     let start = Pos2::new(origin.x + dir.x * min_t, origin.y + dir.y * min_t);
+    //     let end = Pos2::new(origin.x + dir.x * max_t, origin.y + dir.y * max_t);
+
+    //     vec![start, end]
+    // }
+
     // 计算形状的边界框（用于选择和碰撞检测）
     pub fn calculate_shape_bounding_box(shape: &crate::state::CanvasShape) -> egui::Rect {
         match shape.shape_type {

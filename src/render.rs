@@ -8,6 +8,8 @@ use std::sync::Arc;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+use crate::state::OptimizationPolicy;
+
 pub struct RenderState {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -24,10 +26,14 @@ impl RenderState {
         window: &Window,
         width: u32,
         height: u32,
+        optimization_policy: OptimizationPolicy,
     ) -> Self {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: match optimization_policy {
+                    OptimizationPolicy::Performance => wgpu::PowerPreference::HighPerformance,
+                    OptimizationPolicy::ResourceUsage => wgpu::PowerPreference::LowPower,
+                },
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             })
@@ -39,7 +45,10 @@ impl RenderState {
                 label: None,
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
+                memory_hints: match optimization_policy {
+                    OptimizationPolicy::Performance => wgpu::MemoryHints::Performance,
+                    OptimizationPolicy::ResourceUsage => wgpu::MemoryHints::MemoryUsage,
+                },
                 trace: wgpu::Trace::Off,
                 experimental_features: ExperimentalFeatures::default(),
             })
