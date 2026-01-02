@@ -1,4 +1,5 @@
 use egui::{Color32, Painter, Pos2, Stroke};
+use image::{DynamicImage, GenericImageView};
 
 use crate::state::ResizeAnchor;
 
@@ -442,6 +443,35 @@ impl AppUtils {
         }
     }
 
+    // 计算笔画的边界框（用于选择和碰撞检测）
+    pub fn calculate_stroke_bounding_box(stroke: &crate::state::CanvasStroke) -> egui::Rect {
+        if stroke.points.is_empty() {
+            return egui::Rect::from_min_max(Pos2::ZERO, Pos2::ZERO);
+        }
+
+        // 计算所有点的最小和最大坐标
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+
+        for point in &stroke.points {
+            min_x = min_x.min(point.x);
+            max_x = max_x.max(point.x);
+            min_y = min_y.min(point.y);
+            max_y = max_y.max(point.y);
+        }
+
+        // 考虑笔画宽度，添加一些边距
+        let max_width = stroke.widths.iter().copied().fold(0.0, f32::max);
+        let padding = max_width / 2.0 + 5.0; // 添加额外的5像素边距
+
+        egui::Rect::from_min_max(
+            Pos2::new(min_x - padding, min_y - padding),
+            Pos2::new(max_x + padding, max_y + padding),
+        )
+    }
+
     pub fn draw_size_preview(painter: &Painter, pos: Pos2, size: f32) -> () {
         const SIZE_PREVIEW_BORDER_WIDTH: f32 = 2.0;
         let radius = size / SIZE_PREVIEW_BORDER_WIDTH;
@@ -526,5 +556,38 @@ impl AppUtils {
             [object_rect.center_top(), rotation_anchor_pos],
             Stroke::new(2.0, Color32::WHITE),
         );
+    }
+
+    /// 将图像调整大小以适应最大纹理大小限制
+    /// 最大纹理大小通常为 2048x2048，如果图像超过此限制，将其缩放以适应
+    pub fn resize_image_for_texture(
+        image: DynamicImage,
+        max_texture_size: u32,
+    ) -> DynamicImage {
+        let (width, height) = image.dimensions();
+
+        // 如果图像已经在限制内，直接返回
+        if width <= max_texture_size && height <= max_texture_size {
+            return image;
+        }
+
+        // 计算缩放比例以适应最大纹理大小
+        let width_ratio = max_texture_size as f32 / width as f32;
+        let height_ratio = max_texture_size as f32 / height as f32;
+        let scale = width_ratio.min(height_ratio);
+
+        let new_width = (width as f32 * scale) as u32;
+        let new_height = (height as f32 * scale) as u32;
+
+        // 确保新尺寸至少为 1x1
+        let new_width = new_width.max(1);
+        let new_height = new_height.max(1);
+
+        // 使用高质量缩放算法调整图像大小
+        image.resize_exact(
+            new_width,
+            new_height,
+            image::imageops::FilterType::Lanczos3,
+        )
     }
 }
