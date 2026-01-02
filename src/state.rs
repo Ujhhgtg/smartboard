@@ -779,7 +779,7 @@ pub struct AppState {
     pub show_touch_points: bool,       // 是否显示触控点，用于调试
     pub present_mode_changed: bool,    // 垂直同步模式是否已更改
     #[cfg(target_os = "windows")]
-    pub show_console: bool,            // 是否显示控制台 [Windows]
+    pub show_console: bool, // 是否显示控制台 [Windows]
     pub startup_animation: Option<StartupAnimation>, // 启动动画
     pub show_welcome_window: bool,
     pub persistent: PersistentState,
@@ -834,7 +834,7 @@ impl Default for AppState {
     }
 }
 
-#[cfg(target_os = "linux")]
+// #[cfg(target_os = "linux")]
 pub const WGPU_PRESENTMODE_AUTOVSYNC: wgpu::PresentMode = wgpu::PresentMode::AAutoVsync;
 
 #[cfg(not(target_os = "linux"))]

@@ -17,7 +17,7 @@ egui-wgpu = { version = "0.33.3", features = ["winit", "wayland"] }
 egui-winit = { version = "0.33.3", default-features = false, features = [
     "wayland",
 ] }
-wgpu = { version = "*", features = ["webgpu", "webgl", "serde"] }
+wgpu = { version = "27.0.1", features = ["webgpu", "webgl", "serde"] }
 winit = { version = "0.30.12", features = [
     "rwh_06",
     "wayland",
