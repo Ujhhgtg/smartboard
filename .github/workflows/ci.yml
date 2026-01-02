@@ -29,7 +29,6 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install codegen
-        if: matrix.os == 'ubuntu-latest'
         run: rustup component add rustc-codegen-cranelift-preview --toolchain nightly
 
       - name: Install mold (Linux)
