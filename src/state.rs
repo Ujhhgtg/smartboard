@@ -834,7 +834,7 @@ impl Default for AppState {
     }
 }
 
-// #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
 pub const WGPU_PRESENTMODE_AUTOVSYNC: wgpu::PresentMode = wgpu::PresentMode::AAutoVsync;
 
 #[cfg(not(target_os = "linux"))]
