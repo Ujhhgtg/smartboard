@@ -8,10 +8,9 @@ use crate::utils::AppUtils;
 use core::f32;
 use egui::{Color32, Pos2, Shape, Stroke};
 use egui_wgpu::wgpu::SurfaceError;
-use egui_wgpu::{ScreenDescriptor, wgpu};
+use egui_wgpu::{ScreenDescriptor, wgpu, wgpu::PresentMode};
 use std::sync::Arc;
 use std::time::Instant;
-use wgpu::PresentMode;
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -968,7 +967,6 @@ impl App {
                             let present_mode_changed = ui
                                 .selectable_value(
                                     &mut self.state.persistent.present_mode,
-                                    // TODO: bro wtf can you imagine that i have to modify wgpu & egui's source code to fix their weird & incomplete & inconsistent rename of AutoVsync to AAutoVsync
                                     crate::state::WGPU_PRESENTMODE_AUTOVSYNC,
                                     "开 (自动) | AutoVsync",
                                 )
