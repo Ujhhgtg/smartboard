@@ -173,6 +173,13 @@ impl App {
                 println!("wgpu surface outdated");
                 return;
             }
+            Err(SurfaceError::Timeout) => {
+                println!("wgpu surface timeout");
+                return;
+            }
+            Err(SurfaceError::OutOfMemory) => {
+                panic!("out of memory");
+            }
             Err(_) => {
                 surface_texture.expect("Failed to acquire next swap chain texture");
                 return;
