@@ -7,6 +7,7 @@ use rodio::OutputStreamBuilder;
 use rodio::{Decoder, OutputStream, Sink};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::io::Cursor;
 use std::time::Instant;
 use wgpu::PresentMode;
@@ -38,9 +39,9 @@ pub trait Draw {
 }
 
 // 插入的图片数据结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct CanvasImage {
-    pub texture_id: egui::TextureId,
+    pub texture: egui::TextureHandle,
     pub pos: Pos2,
     pub size: egui::Vec2,
     pub aspect_ratio: f32,
@@ -51,7 +52,7 @@ impl Draw for CanvasImage {
     fn draw(&self, painter: &egui::Painter, selected: bool) {
         let img_rect = egui::Rect::from_min_size(self.pos, self.size);
         painter.image(
-            self.texture_id,
+            self.texture.id(),
             img_rect,
             egui::Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
             Color32::WHITE,
@@ -66,6 +67,18 @@ impl Draw for CanvasImage {
                 egui::StrokeKind::Outside,
             );
         }
+    }
+}
+
+impl fmt::Debug for CanvasImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CanvasImage")
+            .field("texture", &"<TextureHandle>")
+            .field("pos", &self.pos)
+            .field("size", &self.size)
+            .field("aspect_ratio", &self.aspect_ratio)
+            .field("marked_for_deletion", &self.marked_for_deletion)
+            .finish()
     }
 }
 
@@ -200,6 +213,7 @@ impl Draw for CanvasShape {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CanvasObject {
     Stroke(CanvasStroke),
+    #[serde(skip)]
     Image(CanvasImage),
     Text(CanvasText),
     Shape(CanvasShape),
@@ -447,28 +461,36 @@ impl CanvasState {
 // 应用程序设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentState {
-    pub stroke_smoothing: bool,
-    pub interpolation_frequency: f32,
-    pub show_fps: bool,
-    pub window_mode: WindowMode,
-    pub keep_insertion_window_open: bool,
-    pub quick_colors: Vec<Color32>,
     pub theme_mode: ThemeMode,
     pub background_color: Color32,
-    pub show_welcome_window_on_start: bool,
-    pub optimization_policy: OptimizationPolicy,
+
+    pub stroke_smoothing: bool,
+    pub stroke_straightening: bool,
+    pub stroke_straightening_tolerance: f32,
+    pub interpolation_frequency: f32,
+    pub quick_colors: Vec<Color32>,
+
+    pub show_fps: bool,
+    pub window_mode: WindowMode,
     pub present_mode: PresentMode,
+    pub optimization_policy: OptimizationPolicy,
+
+    pub keep_insertion_window_open: bool,
+
+    pub show_welcome_window_on_start: bool,
     pub show_startup_animation: bool,
 }
 
 impl Default for PersistentState {
     fn default() -> Self {
         Self {
+            theme_mode: ThemeMode::default(),
+            background_color: Color32::from_rgb(15, 38, 30),
+
             stroke_smoothing: true,
+            stroke_straightening: true,
+            stroke_straightening_tolerance: 20.0,
             interpolation_frequency: 0.1,
-            show_fps: true,
-            window_mode: WindowMode::default(),
-            keep_insertion_window_open: true,
             quick_colors: vec![
                 Color32::from_rgb(255, 0, 0),     // 红色
                 Color32::from_rgb(255, 255, 0),   // 黄色
@@ -476,11 +498,15 @@ impl Default for PersistentState {
                 Color32::from_rgb(0, 0, 0),       // 黑色
                 Color32::from_rgb(255, 255, 255), // 白色
             ],
-            theme_mode: ThemeMode::default(),
-            background_color: Color32::from_rgb(15, 38, 30),
-            show_welcome_window_on_start: true,
-            optimization_policy: OptimizationPolicy::default(),
+
+            show_fps: true,
+            window_mode: WindowMode::default(),
             present_mode: PresentMode::AutoVsync,
+            optimization_policy: OptimizationPolicy::default(),
+
+            keep_insertion_window_open: true,
+
+            show_welcome_window_on_start: true,
             show_startup_animation: true,
         }
     }

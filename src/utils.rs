@@ -297,10 +297,8 @@ impl AppUtils {
     }
 
     // 拉直笔画
-    pub fn straighten_stroke(points: &[Pos2]) -> Vec<Pos2> {
-        const LINE_TOLERANCE: f32 = 20.0; // 可调：像素级
-
-        if Self::is_stroke_linear(points, LINE_TOLERANCE) {
+    pub fn straighten_stroke(points: &[Pos2], tolerance: f32) -> Vec<Pos2> {
+        if Self::is_stroke_linear(points, tolerance) {
             match points.len() {
                 0 => Vec::new(),
                 1 => vec![points[0]],
