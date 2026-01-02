@@ -969,7 +969,7 @@ impl App {
                                 .selectable_value(
                                     &mut self.state.persistent.present_mode,
                                     // TODO: bro wtf can you imagine that i have to modify wgpu & egui's source code to fix their weird & incomplete & inconsistent rename of AutoVsync to AAutoVsync
-                                    PresentMode::AutoVsync,
+                                    crate::state::WGPU_PRESENTMODE_AUTOVSYNC,
                                     "开 (自动) | AutoVsync",
                                 )
                                 .changed()
@@ -1049,12 +1049,12 @@ impl App {
                             ui.checkbox(&mut self.state.show_touch_points, "");
                         });
 
-                        ui.horizontal(|ui| {
-                            ui.label("显示终端 [仅 Windows]:");
-                            let old_show_console = self.state.show_console;
-                            if ui.checkbox(&mut self.state.show_console, "").changed() {
-                                #[cfg(target_os = "windows")]
-                                {
+                        #[cfg(target_os = "windows")]
+                        {
+                            ui.horizontal(|ui| {
+                                ui.label("显示终端 [仅 Windows]:");
+                                let old_show_console = self.state.show_console;
+                                if ui.checkbox(&mut self.state.show_console, "").changed() {
                                     use windows::Win32::System::Console::AllocConsole;
                                     use windows::Win32::System::Console::FreeConsole;
 
@@ -1070,8 +1070,8 @@ impl App {
                                         }
                                     }
                                 }
-                            }
-                        });
+                            });
+                        }
 
                         ui.horizontal(|ui| {
                             ui.label("压力测试:");

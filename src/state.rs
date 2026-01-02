@@ -503,7 +503,7 @@ impl Default for PersistentState {
 
             show_fps: true,
             window_mode: WindowMode::default(),
-            present_mode: PresentMode::AutoVsync,
+            present_mode: crate::state::WGPU_PRESENTMODE_AUTOVSYNC,
             optimization_policy: OptimizationPolicy::default(),
 
             keep_insertion_window_open: true,
@@ -778,6 +778,7 @@ pub struct AppState {
     pub new_quick_color: Color32,      // 新快捷颜色，用于添加
     pub show_touch_points: bool,       // 是否显示触控点，用于调试
     pub present_mode_changed: bool,    // 垂直同步模式是否已更改
+    #[cfg(target_os = "windows")]
     pub show_console: bool,            // 是否显示控制台 [Windows]
     pub startup_animation: Option<StartupAnimation>, // 启动动画
     pub show_welcome_window: bool,
@@ -817,6 +818,7 @@ impl Default for AppState {
             new_quick_color: Color32::WHITE,
             show_touch_points: false,
             present_mode_changed: false,
+            #[cfg(target_os = "windows")]
             show_console: false,
             startup_animation: None,
             show_welcome_window: true,
@@ -831,3 +833,9 @@ impl Default for AppState {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+pub const WGPU_PRESENTMODE_AUTOVSYNC: wgpu::PresentMode = wgpu::PresentMode::AAutoVsync;
+
+#[cfg(not(target_os = "linux"))]
+pub const WGPU_PRESENTMODE_AUTOVSYNC: wgpu::PresentMode = wgpu::PresentMode::AutoVsync;
