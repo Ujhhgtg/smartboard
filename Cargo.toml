@@ -25,10 +25,7 @@ winit = { version = "0.30.12", features = [
     "wayland-dlopen",
 ], default-features = false }
 pollster = "*"
-rfd = { version = "*", features = [
-    "wayland",
-    "xdg-portal",
-], default-features = false }
+rfd = "*"
 image = { version = "*", features = [
     "default-formats",
 ], default-features = false }
