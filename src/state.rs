@@ -231,7 +231,7 @@ impl CanvasObject {
 }
 
 // 调整大小锚点类型
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ResizeAnchor {
     Top,
     Bottom,
@@ -243,21 +243,35 @@ pub enum ResizeAnchor {
     BottomRight,
 }
 
-// 调整大小操作
-#[derive(Clone, Copy)]
-pub struct ResizeOperation {
-    pub anchor: ResizeAnchor,
-    pub start_pos: Pos2,
-    pub start_size: egui::Vec2,
-    pub start_object_pos: Pos2,
+// 变换操作类型
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TransformOperationType {
+    Move,
+    Resize,
+    Rotate,
 }
 
-// 旋转操作
-#[derive(Clone, Copy)]
-pub struct RotationOperation {
+// 变换操作
+#[derive(Clone, Copy, Debug)]
+pub struct TransformOperation {
+    pub operation_type: TransformOperationType,
     pub start_pos: Pos2,
+    pub start_object_pos: Pos2,
+    pub start_size: egui::Vec2,
     pub start_angle: f32,
+    pub anchor: Option<ResizeAnchor>,
     pub center: Pos2,
+    pub aspect_ratio: Option<f32>,
+}
+
+// 对象变换约束
+#[derive(Clone, Copy, Debug)]
+pub struct TransformConstraints {
+    pub min_width: f32,
+    pub min_height: f32,
+    pub preserve_aspect_ratio: bool,
+    pub allow_rotation: bool,
+    pub canvas_bounds: Option<egui::Rect>,
 }
 
 // // Toast 通知类型
@@ -589,6 +603,17 @@ impl Draw for CanvasStroke {
                 );
             }
         }
+
+        // 如果被选中，绘制边框（类似于形状的实现）
+        if selected {
+            let stroke_rect = crate::utils::AppUtils::calculate_stroke_bounding_box(self);
+            painter.rect_stroke(
+                stroke_rect,
+                0.0,
+                Stroke::new(2.0, Color32::BLUE),
+                egui::StrokeKind::Outside,
+            );
+        }
     }
 }
 
@@ -748,6 +773,68 @@ impl StartupAnimation {
     }
 }
 
+// 历史记录结构
+#[derive(Debug, Clone)]
+pub struct History {
+    pub undo_stack: Vec<CanvasState>,
+    pub redo_stack: Vec<CanvasState>,
+    pub max_history_size: usize,
+}
+
+impl History {
+    pub fn new(max_history_size: usize) -> Self {
+        Self {
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            max_history_size,
+        }
+    }
+
+    pub fn save_state(&mut self, state: &CanvasState) {
+        // 保存当前状态到撤销栈
+        self.undo_stack.push(state.clone());
+
+        // 如果超过最大历史大小，移除最旧的状态
+        if self.undo_stack.len() > self.max_history_size {
+            self.undo_stack.remove(0);
+        }
+
+        // 清空重做栈，因为新的操作使得重做历史无效
+        self.redo_stack.clear();
+    }
+
+    pub fn undo(&mut self, current_state: &mut CanvasState) -> bool {
+        if let Some(previous_state) = self.undo_stack.pop() {
+            // 保存当前状态到重做栈
+            self.redo_stack.push(current_state.clone());
+
+            // 恢复到之前的状态
+            *current_state = previous_state;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn redo(&mut self, current_state: &mut CanvasState) -> bool {
+        if let Some(next_state) = self.redo_stack.pop() {
+            // 保存当前状态到撤销栈
+            self.undo_stack.push(current_state.clone());
+
+            // 恢复到下一个状态
+            *current_state = next_state;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+}
+
 // 应用程序状态
 pub struct AppState {
     pub canvas: CanvasState,
@@ -770,8 +857,7 @@ pub struct AppState {
     pub window_mode_changed: bool,                  // 窗口模式是否已更改
     pub resize_anchor_hovered: Option<ResizeAnchor>, // 当前悬停的调整大小锚点
     pub rotation_anchor_hovered: bool,              // 是否悬停在旋转锚点上
-    pub resize_operation: Option<ResizeOperation>,  // 当前正在进行的调整大小操作
-    pub rotation_operation: Option<RotationOperation>, // 当前正在进行的旋转操作
+    pub transform_operation: Option<TransformOperation>, // 当前正在进行的变换操作
     // pub available_video_modes: Vec<winit::monitor::VideoModeHandle>, // 可用的视频模式
     // pub selected_video_mode_index: Option<usize>,   // 选中的视频模式索引
     pub show_quick_color_editor: bool, // 是否显示快捷颜色编辑器
@@ -785,6 +871,7 @@ pub struct AppState {
     pub persistent: PersistentState,
     // pub toast: Option<Toast>, // 当前显示的 Toast 通知
     pub toasts: Toasts,
+    pub history: History, // 历史记录
 }
 
 impl Default for AppState {
@@ -810,8 +897,7 @@ impl Default for AppState {
             window_mode_changed: false,
             resize_anchor_hovered: None,
             rotation_anchor_hovered: false,
-            resize_operation: None,
-            rotation_operation: None,
+            transform_operation: None,
             // available_video_modes: Vec::new(),
             // selected_video_mode_index: None,
             show_quick_color_editor: false,
@@ -830,6 +916,7 @@ impl Default for AppState {
             toasts: Toasts::default()
                 .with_anchor(egui_notify::Anchor::BottomRight)
                 .with_margin(egui::vec2(20.0, 20.0)),
+            history: History::new(50), // 历史记录，最大保存50个状态
         }
     }
 }
