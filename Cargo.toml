@@ -42,9 +42,6 @@ egui-notify = "*"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "*", features = ["Win32_System_Console"] }
 
-[target.'cfg(target_os = "linux")']
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
-
 [profile.dev]
 debug = "line-tables-only"
 codegen-backend = "cranelift"
