@@ -12,7 +12,7 @@ use std::io::Cursor;
 use std::time::Instant;
 use wgpu::PresentMode;
 
-use crate::utils::AppUtils;
+use crate::utils;
 
 // 动态画笔模式
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -90,7 +90,7 @@ impl Draw for CanvasImage {
                 Stroke::new(2.0, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
-            crate::utils::AppUtils::draw_resize_handles(painter, img_rect);
+            utils::draw_resize_handles(painter, img_rect);
         }
     }
 }
@@ -153,7 +153,7 @@ impl Draw for CanvasText {
                 Stroke::new(2.0, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
-            crate::utils::AppUtils::draw_resize_handles(painter, text_rect);
+            utils::draw_resize_handles(painter, text_rect);
         }
     }
 }
@@ -281,7 +281,7 @@ impl Draw for CanvasShape {
                 Stroke::new(2.0, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
-            crate::utils::AppUtils::draw_resize_handles(painter, shape_rect);
+            utils::draw_resize_handles(painter, shape_rect);
         }
     }
 }
@@ -567,7 +567,7 @@ impl Default for PersistentState {
             stroke_straightening: true,
             stroke_straightening_tolerance: 20.0,
             interpolation_frequency: 0.1,
-            quick_colors: AppUtils::get_default_quick_colors(),
+            quick_colors: utils::get_default_quick_colors(),
 
             show_fps: true,
             window_mode: WindowMode::default(),
@@ -1179,27 +1179,27 @@ impl History {
         }
     }
 
-    // 获取内存使用量（用于调试）
-    pub fn memory_usage(&self) -> usize {
-        self.memory_usage
-    }
+    // // 获取内存使用量（用于调试）
+    // pub fn memory_usage(&self) -> usize {
+    //     self.memory_usage
+    // }
 
-    // 清空历史记录
-    pub fn clear(&mut self) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.memory_usage = 0;
-    }
+    // // 清空历史记录
+    // pub fn clear(&mut self) {
+    //     self.undo_stack.clear();
+    //     self.redo_stack.clear();
+    //     self.memory_usage = 0;
+    // }
 
-    // 检查是否可以撤销
-    pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
-    }
+    // // 检查是否可以撤销
+    // pub fn can_undo(&self) -> bool {
+    //     !self.undo_stack.is_empty()
+    // }
 
-    // 检查是否可以重做
-    pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
-    }
+    // // 检查是否可以重做
+    // pub fn can_redo(&self) -> bool {
+    //     !self.redo_stack.is_empty()
+    // }
 
     // 兼容性方法：保存完整状态（用于向后兼容）
     pub fn save_state(&mut self, state: &CanvasState) {
@@ -1223,19 +1223,19 @@ pub struct AppState {
     pub drag_start_pos: Option<Pos2>,               // 拖拽开始位置
     pub dragged_handle: Option<TransformHandle>,    // 正在拖拽的调整句柄
     pub show_size_preview: bool,                    //
-    pub show_text_dialog: bool,                     //
+    pub show_insert_text_dialog: bool,              //
     pub new_text_content: String,                   //
-    pub show_shape_dialog: bool,                    //
+    pub show_insert_shape_dialog: bool,             //
     pub fps_counter: FpsCounter,                    // FPS 计数器
     pub should_quit: bool,                          //
     pub touch_points: HashMap<u64, Pos2>,           // 多点触控点，存储触控 ID 到位置的映射
     pub window_mode_changed: bool,                  // 窗口模式是否已更改
-    // pub available_video_modes: Vec<winit::monitor::VideoModeHandle>, // 可用的视频模式
-    // pub selected_video_mode_index: Option<usize>,   // 选中的视频模式索引
-    pub show_quick_color_editor: bool, // 是否显示快捷颜色编辑器
-    pub new_quick_color: Color32,      // 新快捷颜色，用于添加
-    pub show_touch_points: bool,       // 是否显示触控点，用于调试
-    pub present_mode_changed: bool,    // 垂直同步模式是否已更改
+    pub available_video_modes: Vec<winit::monitor::VideoModeHandle>,
+    pub selected_video_mode_index: Option<usize>, // 选中的视频模式索引
+    pub show_quick_color_editor: bool,            // 是否显示快捷颜色编辑器
+    pub new_quick_color: Color32,                 // 新快捷颜色，用于添加
+    pub show_touch_points: bool,                  // 是否显示触控点，用于调试
+    pub present_mode_changed: bool,               // 垂直同步模式是否已更改
     #[cfg(target_os = "windows")]
     pub show_console: bool, // 是否显示控制台 [Windows]
     pub startup_animation: Option<StartupAnimation>, // 启动动画
@@ -1262,13 +1262,13 @@ impl Default for AppState {
             show_size_preview: false,
             fps_counter: FpsCounter::new(),
             should_quit: false,
-            show_text_dialog: false,
+            show_insert_text_dialog: false,
             new_text_content: String::from(""),
-            show_shape_dialog: false,
+            show_insert_shape_dialog: false,
             touch_points: HashMap::new(),
             window_mode_changed: false,
-            // available_video_modes: Vec::new(),
-            // selected_video_mode_index: None,
+            available_video_modes: Vec::new(),
+            selected_video_mode_index: None,
             show_quick_color_editor: false,
             new_quick_color: Color32::WHITE,
             show_touch_points: false,
@@ -1285,3 +1285,6 @@ impl Default for AppState {
         }
     }
 }
+
+pub const FONT: &[u8] = include_bytes!("../assets/fonts/NotoSansCJKsc-Regular.otf");
+pub const ICON: &[u8] = include_bytes!("../assets/images/icon.ico");

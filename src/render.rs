@@ -1,4 +1,4 @@
-use egui::{Context, FontData, FontDefinitions, FontFamily};
+use egui::{Context, FontDefinitions};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::ExperimentalFeatures;
 use egui_wgpu::wgpu::{CommandEncoder, Device, Queue, StoreOp, TextureFormat, TextureView};
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::state::OptimizationPolicy;
+use crate::state::{FONT, OptimizationPolicy};
 
 pub struct RenderState {
     pub device: wgpu::Device,
@@ -154,70 +154,68 @@ impl EguiRenderer {
     fn setup_fonts(ctx: &mut Context) {
         let mut fonts = FontDefinitions::default();
 
-        // fonts.font_data.insert(
-        //     "notosans_cjk_sc".to_owned(),
-        //     Arc::new(egui::FontData::from_static(include_bytes!(
-        //         "../assets/fonts/NotoSans-CJK-SC/NotoSansCJKsc-Regular.otf"
-        //     ))),
-        // );
+        fonts.font_data.insert(
+            "notosans_cjk_sc".to_owned(),
+            Arc::new(egui::FontData::from_static(FONT)),
+        );
 
-        // fonts
-        //     .families
-        //     .entry(egui::FontFamily::Proportional)
-        //     .or_default()
-        //     .insert(0, "notosans_cjk_sc".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "notosans_cjk_sc".to_owned());
 
-        let mut font_db = fontdb::Database::new();
-        font_db.load_system_fonts();
+        // let mut font_db = fontdb::Database::new();
+        // font_db.load_system_fonts();
 
-        let cjk_font_names = [
-            "Noto Sans CJK SC",
-            "Noto Sans CJK",
-            "Microsoft YaHei",
-            "微软雅黑",
-        ];
+        // let cjk_font_names = [
+        //     "Noto Sans CJK SC",
+        //     "Noto Sans CJK",
+        //     "Microsoft YaHei",
+        //     "微软雅黑",
+        // ];
 
-        let mut font_loaded = false;
+        // let mut font_loaded = false;
 
-        for font_name in &cjk_font_names {
-            if let Some(face_id) = font_db.query(&fontdb::Query {
-                families: &[fontdb::Family::Name(font_name)],
-                weight: fontdb::Weight::NORMAL,
-                stretch: fontdb::Stretch::Normal,
-                style: fontdb::Style::Normal,
-            }) {
-                if let Some(font_data) =
-                    font_db.with_face_data(face_id, |data, _| Some(data.to_vec()))
-                {
-                    if let Some(font_bytes) = font_data {
-                        fonts.font_data.insert(
-                            "cjk_font".to_owned(),
-                            Arc::new(FontData::from_owned(font_bytes)),
-                        );
+        // for font_name in &cjk_font_names {
+        //     if let Some(face_id) = font_db.query(&fontdb::Query {
+        //         families: &[fontdb::Family::Name(font_name)],
+        //         weight: fontdb::Weight::NORMAL,
+        //         stretch: fontdb::Stretch::Normal,
+        //         style: fontdb::Style::Normal,
+        //     }) {
+        //         if let Some(font_data) =
+        //             font_db.with_face_data(face_id, |data, _| Some(data.to_vec()))
+        //         {
+        //             if let Some(font_bytes) = font_data {
+        //                 fonts.font_data.insert(
+        //                     "cjk_font".to_owned(),
+        //                     Arc::new(FontData::from_owned(font_bytes)),
+        //                 );
 
-                        fonts
-                            .families
-                            .get_mut(&FontFamily::Proportional)
-                            .unwrap()
-                            .insert(0, "cjk_font".to_owned());
+        //                 fonts
+        //                     .families
+        //                     .get_mut(&FontFamily::Proportional)
+        //                     .unwrap()
+        //                     .insert(0, "cjk_font".to_owned());
 
-                        fonts
-                            .families
-                            .get_mut(&FontFamily::Monospace)
-                            .unwrap()
-                            .insert(0, "cjk_font".to_owned());
+        //                 fonts
+        //                     .families
+        //                     .get_mut(&FontFamily::Monospace)
+        //                     .unwrap()
+        //                     .insert(0, "cjk_font".to_owned());
 
-                        font_loaded = true;
+        //                 font_loaded = true;
 
-                        break;
-                    }
-                }
-            }
-        }
+        //                 break;
+        //             }
+        //         }
+        //     }
+        // }
 
-        if !font_loaded {
-            panic!("cannot find cjk font")
-        }
+        // if !font_loaded {
+        //     panic!("cannot find cjk font")
+        // }
 
         ctx.set_fonts(fonts);
     }

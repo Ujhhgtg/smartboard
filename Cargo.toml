@@ -29,7 +29,6 @@ rfd = "*"
 image = { version = "*", features = [
     "default-formats",
 ], default-features = false }
-fontdb = "*"
 rodio = { version = "*", default-features = false, features = [
     "wav",
     "playback",
@@ -38,6 +37,9 @@ serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 dirs = "*"
 egui-notify = "*"
+# fontdue = "*"
+ttf-parser = "*"
+tray-icon = "*"
 
 [build-dependencies]
 shellexpand = "*"
@@ -57,6 +59,12 @@ debug = false
 lto = "thin"
 strip = true
 rustflags = ["-Zthreads=8"]
+
+[profile.release-small]
+inherits = "release"
+lto = "thin"
+strip = true
+rustflags = ["-Zthreads=8", "-Copt-level=s"]
 
 [target.'cfg(target_os = "linux")'.profile.dev]
 rustflags = ["-Zthreads=8", "-Clink-arg=-fuse-ld=mold"]

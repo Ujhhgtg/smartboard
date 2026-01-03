@@ -28,8 +28,16 @@ fn main() {
     }
 }
 
+enum UserEvent {
+    TrayIconEvent(tray_icon::TrayIconEvent),
+}
+
 async fn run() {
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
+    let proxy = event_loop.create_proxy();
+    tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
+        let _ = proxy.send_event(UserEvent::TrayIconEvent(event));
+    }));
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = app::App::new();
     event_loop.run_app(&mut app).expect("Failed to run app");
