@@ -431,8 +431,12 @@ pub fn resize_image_for_texture(image: DynamicImage, max_texture_size: u32) -> D
     let new_width = new_width.max(1);
     let new_height = new_height.max(1);
 
-    // 使用高质量缩放算法调整图像大小
-    image.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
+    // 使用缩放算法调整图像大小
+    image.resize_exact(
+        new_width,
+        new_height,
+        image::imageops::FilterType::CatmullRom,
+    )
 }
 
 pub fn get_default_quick_colors() -> Vec<egui::Color32> {
@@ -602,6 +606,7 @@ pub fn rasterize_text(
                     widths: vec![1.0; len],
                     color: text.color,
                     base_width: text.font_size,
+                    rot: 0.0,
                 });
             }
 
