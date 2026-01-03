@@ -1,8 +1,8 @@
 use crate::render::RenderState;
 use crate::state::{
-    AppState, CanvasImage, CanvasObject, CanvasShape, CanvasShapeType, CanvasState, CanvasStroke,
-    CanvasText, CanvasTool, DynamicBrushWidthMode, FONT, ICON, OptimizationPolicy, PersistentState,
-    StartupAnimation, ThemeMode, TransformHandle, WindowMode,
+    AppState, CanvasImage, CanvasObject, CanvasObjectOps, CanvasShape, CanvasShapeType,
+    CanvasState, CanvasText, CanvasTool, DynamicBrushWidthMode, FONT, ICON, OptimizationPolicy,
+    PersistentState, StartupAnimation, ThemeMode, WindowMode,
 };
 use crate::{UserEvent, utils};
 use core::f32;
@@ -158,257 +158,6 @@ impl App {
 
         if let Some(render_state) = self.render_state.as_mut() {
             render_state.set_present_mode(wgpu_present_mode);
-        }
-    }
-
-    // Move an object by the given delta
-    fn move_object(object: &mut CanvasObject, delta: egui::Vec2) {
-        match object {
-            CanvasObject::Image(img) => {
-                img.pos += delta;
-            }
-            CanvasObject::Text(text) => {
-                text.pos += delta;
-            }
-            CanvasObject::Shape(shape) => {
-                shape.pos += delta;
-            }
-            CanvasObject::Stroke(stroke) => {
-                // For strokes, move all points
-                for point in &mut stroke.points {
-                    *point += delta;
-                }
-            }
-        }
-    }
-
-    // Resize an object using the given handle and delta
-    fn resize_object(
-        object: &mut CanvasObject,
-        handle: TransformHandle,
-        delta: egui::Vec2,
-        drag_start: Pos2,
-        current_pos: Pos2,
-    ) {
-        match object {
-            CanvasObject::Image(img) => {
-                Self::resize_image(img, handle, delta, drag_start, current_pos);
-            }
-            CanvasObject::Text(text) => {
-                Self::resize_text(text, handle, delta);
-            }
-            CanvasObject::Shape(shape) => {
-                Self::resize_shape(shape, handle, delta);
-            }
-            CanvasObject::Stroke(stroke) => {
-                Self::resize_stroke(stroke, handle, delta, drag_start, current_pos);
-            }
-        }
-    }
-
-    fn resize_image(
-        img: &mut CanvasImage,
-        handle: TransformHandle,
-        _delta: egui::Vec2,
-        _drag_start: Pos2,
-        current_pos: Pos2,
-    ) {
-        let bbox = img.bounding_box();
-
-        match handle {
-            TransformHandle::TopLeft => {
-                let new_min = current_pos;
-                let new_max = bbox.max;
-                let new_size = egui::vec2(
-                    (new_max.x - new_min.x).max(10.0),
-                    (new_max.y - new_min.y).max(10.0),
-                );
-                img.size = new_size;
-                img.pos = new_min;
-            }
-            TransformHandle::Top => {
-                let new_height = (bbox.max.y - current_pos.y).max(10.0);
-                img.size.y = new_height;
-                img.pos.y = current_pos.y;
-            }
-            TransformHandle::TopRight => {
-                let new_max = Pos2::new(current_pos.x, bbox.max.y);
-                let new_min = Pos2::new(bbox.min.x, current_pos.y);
-                let new_size = egui::vec2(
-                    (new_max.x - new_min.x).max(10.0),
-                    (new_max.y - new_min.y).max(10.0),
-                );
-                img.size = new_size;
-                img.pos.y = new_min.y;
-            }
-            TransformHandle::Left => {
-                let new_width = (bbox.max.x - current_pos.x).max(10.0);
-                img.size.x = new_width;
-                img.pos.x = current_pos.x;
-            }
-            TransformHandle::Right => {
-                let new_width = (current_pos.x - bbox.min.x).max(10.0);
-                img.size.x = new_width;
-            }
-            TransformHandle::BottomLeft => {
-                let new_min = Pos2::new(current_pos.x, bbox.min.y);
-                let new_max = Pos2::new(bbox.max.x, current_pos.y);
-                let new_size = egui::vec2(
-                    (new_max.x - new_min.x).max(10.0),
-                    (new_max.y - new_min.y).max(10.0),
-                );
-                img.size = new_size;
-                img.pos.x = new_min.x;
-            }
-            TransformHandle::Bottom => {
-                let new_height = (current_pos.y - bbox.min.y).max(10.0);
-                img.size.y = new_height;
-            }
-            TransformHandle::BottomRight => {
-                let new_size = egui::vec2(
-                    (current_pos.x - bbox.min.x).max(10.0),
-                    (current_pos.y - bbox.min.y).max(10.0),
-                );
-                img.size = new_size;
-            }
-            TransformHandle::Rotate => {
-                // For now, ignore rotation for images
-            }
-        }
-    }
-
-    fn resize_shape(shape: &mut CanvasShape, handle: TransformHandle, delta: egui::Vec2) {
-        match handle {
-            TransformHandle::TopLeft
-            | TransformHandle::Top
-            | TransformHandle::TopRight
-            | TransformHandle::Left
-            | TransformHandle::Right
-            | TransformHandle::BottomLeft
-            | TransformHandle::Bottom
-            | TransformHandle::BottomRight => {
-                // For shapes, scale the size uniformly
-                let scale_factor = 1.0 + (delta.x + delta.y) / 200.0; // Simple scaling
-                shape.size = (shape.size * scale_factor).max(10.0);
-            }
-            TransformHandle::Rotate => {
-                // For now, ignore rotation for shapes
-            }
-        }
-    }
-
-    fn resize_text(text: &mut CanvasText, handle: TransformHandle, delta: egui::Vec2) {
-        match handle {
-            TransformHandle::TopLeft
-            | TransformHandle::Top
-            | TransformHandle::TopRight
-            | TransformHandle::Left
-            | TransformHandle::Right
-            | TransformHandle::BottomLeft
-            | TransformHandle::Bottom
-            | TransformHandle::BottomRight => {
-                // Scale font size
-                let scale_factor = 1.0 + (delta.x + delta.y) / 200.0;
-                text.font_size = (text.font_size * scale_factor).max(6.0);
-            }
-            TransformHandle::Rotate => {
-                // For now, ignore rotation for text
-            }
-        }
-    }
-
-    fn resize_stroke(
-        stroke: &mut CanvasStroke,
-        handle: TransformHandle,
-        delta: egui::Vec2,
-        _drag_start: Pos2,
-        _current_pos: Pos2,
-    ) {
-        let bbox = stroke.bounding_box();
-        let center = bbox.center();
-
-        // Calculate scale factors
-        let scale_x = if bbox.width() > 0.0 {
-            (bbox.width() + delta.x) / bbox.width()
-        } else {
-            1.0
-        };
-        let scale_y = if bbox.height() > 0.0 {
-            (bbox.height() + delta.y) / bbox.height()
-        } else {
-            1.0
-        };
-
-        match handle {
-            TransformHandle::TopLeft => {
-                let scale = scale_x.min(scale_y);
-                Self::scale_stroke_points(stroke, center, scale, scale);
-                // Adjust position
-                let new_center = center + delta / 2.0;
-                Self::move_stroke_to_center(stroke, new_center);
-            }
-            TransformHandle::Top => {
-                Self::scale_stroke_points(stroke, center, 1.0, scale_y);
-                let new_center = Pos2::new(center.x, center.y + delta.y / 2.0);
-                Self::move_stroke_to_center(stroke, new_center);
-            }
-            TransformHandle::TopRight => {
-                let scale = scale_x.min(scale_y);
-                Self::scale_stroke_points(stroke, center, scale, scale);
-                let new_center = center + delta / 2.0;
-                Self::move_stroke_to_center(stroke, new_center);
-            }
-            TransformHandle::Left => {
-                Self::scale_stroke_points(stroke, center, scale_x, 1.0);
-                let new_center = Pos2::new(center.x + delta.x / 2.0, center.y);
-                Self::move_stroke_to_center(stroke, new_center);
-            }
-            TransformHandle::Right => {
-                Self::scale_stroke_points(stroke, center, scale_x, 1.0);
-                let new_center = Pos2::new(center.x + delta.x / 2.0, center.y);
-                Self::move_stroke_to_center(stroke, new_center);
-            }
-            TransformHandle::BottomLeft => {
-                let scale = scale_x.min(scale_y);
-                Self::scale_stroke_points(stroke, center, scale, scale);
-                let new_center = center + delta / 2.0;
-                Self::move_stroke_to_center(stroke, new_center);
-            }
-            TransformHandle::Bottom => {
-                Self::scale_stroke_points(stroke, center, 1.0, scale_y);
-                let new_center = Pos2::new(center.x, center.y + delta.y / 2.0);
-                Self::move_stroke_to_center(stroke, new_center);
-            }
-            TransformHandle::BottomRight => {
-                let scale = scale_x.min(scale_y);
-                Self::scale_stroke_points(stroke, center, scale, scale);
-                let new_center = center + delta / 2.0;
-                Self::move_stroke_to_center(stroke, new_center);
-            }
-            TransformHandle::Rotate => {
-                // For now, ignore rotation for strokes
-            }
-        }
-    }
-
-    fn scale_stroke_points(stroke: &mut CanvasStroke, center: Pos2, scale_x: f32, scale_y: f32) {
-        for point in &mut stroke.points {
-            let relative = *point - center;
-            point.x = center.x + relative.x * scale_x;
-            point.y = center.y + relative.y * scale_y;
-        }
-        // Scale widths proportionally
-        let avg_scale = (scale_x + scale_y) / 2.0;
-        for width in &mut stroke.widths {
-            *width *= avg_scale;
-        }
-    }
-
-    fn move_stroke_to_center(stroke: &mut CanvasStroke, new_center: Pos2) {
-        let current_center = stroke.bounding_box().center();
-        let offset = new_center - current_center;
-        for point in &mut stroke.points {
-            *point += offset;
         }
     }
 
@@ -867,6 +616,7 @@ impl App {
                                             widths: active_stroke.widths,
                                             color: old_color,
                                             base_width: self.state.brush_width,
+                                            rot: 0.0,
                                         },
                                     ));
                                 }
@@ -1022,6 +772,7 @@ impl App {
                                             size: egui::vec2(target_width, target_height),
                                             aspect_ratio,
                                             marked_for_deletion: false,
+                                            rot: 0.0,
                                         },
                                     ));
 
@@ -1063,6 +814,7 @@ impl App {
                                                 pos: Pos2::new(100.0, 100.0),
                                                 color: Color32::WHITE,
                                                 font_size: 16.0,
+                                                rot: 0.0,
                                             },
                                         ));
                                         self.state.current_tool = CanvasTool::Select;
@@ -1603,6 +1355,7 @@ impl App {
                                         widths,
                                         color: stress_color,
                                         base_width: stress_width,
+                                        rot: 0.0,
                                     };
 
                                     self.state.canvas.objects.push(CanvasObject::Stroke(stroke));
@@ -1707,7 +1460,7 @@ impl App {
             // 绘制所有对象
             for (i, object) in self.state.canvas.objects.iter().enumerate() {
                 let selected = self.state.selected_object == Some(i);
-                object.draw(painter, selected);
+                object.paint(painter, selected);
             }
 
             // 绘制当前正在绘制的笔画
@@ -1864,8 +1617,7 @@ impl App {
                                     if let Some(object) =
                                         self.state.canvas.objects.get_mut(selected_idx)
                                     {
-                                        Self::resize_object(
-                                            object,
+                                        object.transform(
                                             dragged_handle,
                                             delta,
                                             drag_start,
@@ -1884,7 +1636,7 @@ impl App {
                                     if let Some(object) =
                                         self.state.canvas.objects.get_mut(selected_idx)
                                     {
-                                        Self::move_object(object, delta);
+                                        CanvasObject::move_object(object, delta);
                                     }
                                     self.state.history.save_modify_object(
                                         selected_idx,
@@ -2034,6 +1786,7 @@ impl App {
                                                     widths: current_widths.clone(),
                                                     color: stroke.color,
                                                     base_width: stroke.base_width,
+                                                    rot: 0.0,
                                                 });
                                             }
                                             // 开始新的笔画段落
@@ -2049,6 +1802,7 @@ impl App {
                                             widths: current_widths,
                                             color: stroke.color,
                                             base_width: stroke.base_width,
+                                            rot: 0.0,
                                         });
                                     }
                                 } else {
@@ -2212,6 +1966,7 @@ impl App {
                                             widths: interpolated_widths,
                                             color: self.state.brush_color,
                                             base_width: self.state.brush_width,
+                                            rot: 0.0,
                                         },
                                     ));
                                 }
@@ -2236,6 +1991,7 @@ impl App {
                                         widths: vec![self.state.brush_width],
                                         color: self.state.brush_color,
                                         base_width: self.state.brush_width,
+                                        rot: 0.0,
                                     },
                                 ));
                             }
@@ -2547,6 +2303,7 @@ impl ApplicationHandler<UserEvent> for App {
                                             widths: interpolated_widths,
                                             color: self.state.brush_color,
                                             base_width: self.state.brush_width,
+                                            rot: 0.0,
                                         },
                                     ));
                                 }

@@ -52,8 +52,16 @@ pub enum CanvasTool {
 }
 
 // 可绘制对象的 trait
-pub trait Draw {
-    fn draw(&self, painter: &egui::Painter, selected: bool);
+pub trait CanvasObjectOps {
+    fn paint(&self, painter: &egui::Painter, selected: bool);
+    fn bounding_box(&self) -> egui::Rect;
+    fn transform(
+        &mut self,
+        handle: TransformHandle,
+        delta: egui::Vec2,
+        drag_start: Pos2,
+        current_pos: Pos2,
+    );
 }
 
 // 插入的图片数据结构
@@ -64,16 +72,86 @@ pub struct CanvasImage {
     pub size: egui::Vec2,
     pub aspect_ratio: f32,
     pub marked_for_deletion: bool, // deferred deletion to avoid panic
+    pub rot: f32,
 }
 
-impl CanvasImage {
-    pub fn bounding_box(&self) -> egui::Rect {
+impl CanvasObjectOps for CanvasImage {
+    fn transform(
+        &mut self,
+        handle: TransformHandle,
+        _delta: egui::Vec2,
+        _drag_start: Pos2,
+        current_pos: Pos2,
+    ) {
+        let bbox = self.bounding_box();
+
+        match handle {
+            TransformHandle::TopLeft => {
+                let new_min = current_pos;
+                let new_max = bbox.max;
+                let new_size = egui::vec2(
+                    (new_max.x - new_min.x).max(10.0),
+                    (new_max.y - new_min.y).max(10.0),
+                );
+                self.size = new_size;
+                self.pos = new_min;
+            }
+            TransformHandle::Top => {
+                let new_height = (bbox.max.y - current_pos.y).max(10.0);
+                self.size.y = new_height;
+                self.pos.y = current_pos.y;
+            }
+            TransformHandle::TopRight => {
+                let new_max = Pos2::new(current_pos.x, bbox.max.y);
+                let new_min = Pos2::new(bbox.min.x, current_pos.y);
+                let new_size = egui::vec2(
+                    (new_max.x - new_min.x).max(10.0),
+                    (new_max.y - new_min.y).max(10.0),
+                );
+                self.size = new_size;
+                self.pos.y = new_min.y;
+            }
+            TransformHandle::Left => {
+                let new_width = (bbox.max.x - current_pos.x).max(10.0);
+                self.size.x = new_width;
+                self.pos.x = current_pos.x;
+            }
+            TransformHandle::Right => {
+                let new_width = (current_pos.x - bbox.min.x).max(10.0);
+                self.size.x = new_width;
+            }
+            TransformHandle::BottomLeft => {
+                let new_min = Pos2::new(current_pos.x, bbox.min.y);
+                let new_max = Pos2::new(bbox.max.x, current_pos.y);
+                let new_size = egui::vec2(
+                    (new_max.x - new_min.x).max(10.0),
+                    (new_max.y - new_min.y).max(10.0),
+                );
+                self.size = new_size;
+                self.pos.x = new_min.x;
+            }
+            TransformHandle::Bottom => {
+                let new_height = (current_pos.y - bbox.min.y).max(10.0);
+                self.size.y = new_height;
+            }
+            TransformHandle::BottomRight => {
+                let new_size = egui::vec2(
+                    (current_pos.x - bbox.min.x).max(10.0),
+                    (current_pos.y - bbox.min.y).max(10.0),
+                );
+                self.size = new_size;
+            }
+            TransformHandle::Rotate => {
+                // For now, ignore rotation for images
+            }
+        }
+    }
+
+    fn bounding_box(&self) -> egui::Rect {
         egui::Rect::from_min_size(self.pos, self.size)
     }
-}
 
-impl Draw for CanvasImage {
-    fn draw(&self, painter: &egui::Painter, selected: bool) {
+    fn paint(&self, painter: &egui::Painter, selected: bool) {
         let img_rect = self.bounding_box();
         painter.image(
             self.texture.id(),
@@ -114,20 +192,45 @@ pub struct CanvasText {
     pub pos: Pos2,
     pub color: Color32,
     pub font_size: f32,
+    pub rot: f32,
 }
 
-impl CanvasText {
-    pub fn bounding_box(&self) -> egui::Rect {
+impl CanvasObjectOps for CanvasText {
+    fn transform(
+        &mut self,
+        handle: TransformHandle,
+        delta: egui::Vec2,
+        _drag_start: Pos2,
+        _current_pos: Pos2,
+    ) {
+        match handle {
+            TransformHandle::TopLeft
+            | TransformHandle::Top
+            | TransformHandle::TopRight
+            | TransformHandle::Left
+            | TransformHandle::Right
+            | TransformHandle::BottomLeft
+            | TransformHandle::Bottom
+            | TransformHandle::BottomRight => {
+                // Scale font size
+                let scale_factor = 1.0 + (delta.x + delta.y) / 200.0;
+                self.font_size = (self.font_size * scale_factor).max(6.0);
+            }
+            TransformHandle::Rotate => {
+                // For now, ignore rotation for text
+            }
+        }
+    }
+
+    fn bounding_box(&self) -> egui::Rect {
         // 估算文本尺寸（近似值）
         let approx_char_width = self.font_size * 0.6;
         let approx_width = self.text.len() as f32 * approx_char_width;
         let approx_height = self.font_size * 1.2;
         egui::Rect::from_min_size(self.pos, egui::vec2(approx_width, approx_height))
     }
-}
 
-impl Draw for CanvasText {
-    fn draw(&self, painter: &egui::Painter, selected: bool) {
+    fn paint(&self, painter: &egui::Painter, selected: bool) {
         // Draw text using egui's text rendering
         let text_galley = painter.layout_no_wrap(
             self.text.clone(),
@@ -139,7 +242,7 @@ impl Draw for CanvasText {
             galley: text_galley.clone(),
             underline: egui::Stroke::NONE,
             override_text_color: None,
-            angle: 0.0,
+            angle: self.rot,
             fallback_color: self.color,
             opacity_factor: 1.0,
         };
@@ -177,8 +280,34 @@ pub struct CanvasShape {
     pub rotation: f32,
 }
 
-impl CanvasShape {
-    pub fn bounding_box(&self) -> egui::Rect {
+impl CanvasObjectOps for CanvasShape {
+    fn transform(
+        &mut self,
+        handle: TransformHandle,
+        delta: egui::Vec2,
+        _drag_start: Pos2,
+        _current_pos: Pos2,
+    ) {
+        match handle {
+            TransformHandle::TopLeft
+            | TransformHandle::Top
+            | TransformHandle::TopRight
+            | TransformHandle::Left
+            | TransformHandle::Right
+            | TransformHandle::BottomLeft
+            | TransformHandle::Bottom
+            | TransformHandle::BottomRight => {
+                // For shapes, scale the size uniformly
+                let scale_factor = 1.0 + (delta.x + delta.y) / 200.0; // Simple scaling
+                self.size = (self.size * scale_factor).max(10.0);
+            }
+            TransformHandle::Rotate => {
+                // For now, ignore rotation for shapes
+            }
+        }
+    }
+
+    fn bounding_box(&self) -> egui::Rect {
         match self.shape_type {
             CanvasShapeType::Line => {
                 let end_point = Pos2::new(self.pos.x + self.size, self.pos.y);
@@ -216,10 +345,8 @@ impl CanvasShape {
             }
         }
     }
-}
 
-impl Draw for CanvasShape {
-    fn draw(&self, painter: &egui::Painter, selected: bool) {
+    fn paint(&self, painter: &egui::Painter, selected: bool) {
         // 绘制形状本身
         match self.shape_type {
             CanvasShapeType::Line => {
@@ -297,16 +424,55 @@ pub enum CanvasObject {
 }
 
 impl CanvasObject {
-    pub fn draw(&self, painter: &egui::Painter, selected: bool) {
+    pub fn move_object(object: &mut CanvasObject, delta: egui::Vec2) {
+        match object {
+            CanvasObject::Image(img) => {
+                img.pos += delta;
+            }
+            CanvasObject::Text(text) => {
+                text.pos += delta;
+            }
+            CanvasObject::Shape(shape) => {
+                shape.pos += delta;
+            }
+            CanvasObject::Stroke(stroke) => {
+                // For strokes, move all points
+                for point in &mut stroke.points {
+                    *point += delta;
+                }
+            }
+        }
+    }
+}
+
+impl CanvasObjectOps for CanvasObject {
+    fn transform(
+        &mut self,
+        handle: TransformHandle,
+        delta: egui::Vec2,
+        drag_start: Pos2,
+        current_pos: Pos2,
+    ) {
         match self {
-            CanvasObject::Stroke(stroke) => stroke.draw(painter, selected),
-            CanvasObject::Image(image) => image.draw(painter, selected),
-            CanvasObject::Text(text) => text.draw(painter, selected),
-            CanvasObject::Shape(shape) => shape.draw(painter, selected),
+            CanvasObject::Image(img) => img.transform(handle, delta, drag_start, current_pos),
+            CanvasObject::Text(text) => text.transform(handle, delta, drag_start, current_pos),
+            CanvasObject::Shape(shape) => shape.transform(handle, delta, drag_start, current_pos),
+            CanvasObject::Stroke(stroke) => {
+                stroke.transform(handle, delta, drag_start, current_pos)
+            }
         }
     }
 
-    pub fn bounding_box(&self) -> egui::Rect {
+    fn paint(&self, painter: &egui::Painter, selected: bool) {
+        match self {
+            CanvasObject::Stroke(stroke) => stroke.paint(painter, selected),
+            CanvasObject::Image(image) => image.paint(painter, selected),
+            CanvasObject::Text(text) => text.paint(painter, selected),
+            CanvasObject::Shape(shape) => shape.paint(painter, selected),
+        }
+    }
+
+    fn bounding_box(&self) -> egui::Rect {
         match self {
             CanvasObject::Stroke(stroke) => stroke.bounding_box(),
             CanvasObject::Image(image) => image.bounding_box(),
@@ -315,129 +481,6 @@ impl CanvasObject {
         }
     }
 }
-
-// // Toast 通知类型
-// #[derive(Clone, Copy, PartialEq, Eq)]
-// pub enum ToastType {
-//     Success,
-//     Error,
-// }
-
-// // Toast 通知
-// #[derive(Clone)]
-// pub struct Toast {
-//     pub message: String,
-//     pub toast_type: ToastType,
-//     pub start_time: Instant,
-// }
-
-// impl Toast {
-//     pub fn new(message: String, toast_type: ToastType) -> Self {
-//         Self {
-//             message,
-//             toast_type,
-//             start_time: Instant::now(),
-//         }
-//     }
-
-//     pub fn draw(&self, ctx: &Context) {
-//         // 检查 Toast 是否过期
-//         if self.is_finished() {
-//             return;
-//         }
-
-//         // 计算 Toast 位置（水平居中，垂直 70% 位置）
-//         let content_rect = ctx.available_rect();
-//         let toast_width = 300.0; // 固定宽度
-//         let toast_height = 80.0; // 固定高度
-
-//         let toast_x = content_rect.center().x - toast_width / 2.0;
-//         let toast_y = content_rect.min.y + content_rect.height() * 0.7 - toast_height / 2.0;
-
-//         let toast_rect = egui::Rect::from_min_size(
-//             egui::pos2(toast_x, toast_y),
-//             egui::vec2(toast_width, toast_height),
-//         );
-
-//         // 创建 Toast 窗口
-//         let painter = ctx.layer_painter(egui::LayerId::new(
-//             egui::Order::Foreground, // 确保 Toast 在最前面
-//             egui::Id::new("toast_notification"),
-//         ));
-
-//         // 根据 Toast 类型选择颜色
-//         let (bg_color, icon, icon_color) = match self.toast_type {
-//             ToastType::Success => (
-//                 Color32::from_rgba_unmultiplied(46, 125, 50, 230), // 深绿色
-//                 "✓",                                               // 成功图标
-//                 Color32::WHITE,
-//             ),
-//             ToastType::Error => (
-//                 Color32::from_rgba_unmultiplied(211, 47, 47, 230), // 深红色
-//                 "✗",                                               // 错误图标
-//                 Color32::WHITE,
-//             ),
-//         };
-
-//         // 绘制 Toast 背景
-//         painter.rect_filled(toast_rect, 10.0, bg_color);
-
-//         // 绘制 Toast 边框
-//         painter.rect_stroke(
-//             toast_rect,
-//             10.0,
-//             Stroke::new(2.0, Color32::from_black_alpha(100)),
-//             egui::StrokeKind::Outside,
-//         );
-
-//         // 绘制图标和文本
-//         let icon_font = egui::FontId::proportional(30.0);
-//         let text_font = egui::FontId::proportional(16.0);
-
-//         // 计算图标位置
-//         let icon_pos = egui::pos2(
-//             toast_rect.min.x + 20.0,
-//             toast_rect.center().y - 15.0, // 中心对齐图标
-//         );
-
-//         // 绘制图标
-//         let icon_galley = painter.layout_no_wrap(icon.to_string(), icon_font.clone(), icon_color);
-//         let icon_shape = egui::epaint::TextShape {
-//             pos: icon_pos,
-//             galley: icon_galley,
-//             underline: egui::Stroke::NONE,
-//             override_text_color: None,
-//             angle: 0.0,
-//             fallback_color: icon_color,
-//             opacity_factor: 1.0,
-//         };
-//         painter.add(icon_shape);
-
-//         // 计算文本位置（图标右侧）
-//         let text_start_x = icon_pos.x + 40.0; // 图标宽度 + 间距
-//         let text_pos = egui::pos2(
-//             text_start_x,
-//             toast_rect.center().y - 10.0, // 中心对齐文本
-//         );
-
-//         // 绘制文本
-//         let text_galley = painter.layout_no_wrap(self.message.clone(), text_font, Color32::WHITE);
-//         let text_shape = egui::epaint::TextShape {
-//             pos: text_pos,
-//             galley: text_galley,
-//             underline: egui::Stroke::NONE,
-//             override_text_color: None,
-//             angle: 0.0,
-//             fallback_color: Color32::WHITE,
-//             opacity_factor: 1.0,
-//         };
-//         painter.add(text_shape);
-//     }
-
-//     pub fn is_finished(&self) -> bool {
-//         self.start_time.elapsed().as_secs_f32() >= 3.0
-//     }
-// }
 
 // 窗口模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -621,10 +664,113 @@ pub struct CanvasStroke {
     pub widths: Vec<f32>, // 每个点的宽度（用于动态画笔）
     pub color: Color32,
     pub base_width: f32,
+    pub rot: f32,
 }
 
 impl CanvasStroke {
-    pub fn bounding_box(&self) -> egui::Rect {
+    fn scale_stroke_points(stroke: &mut CanvasStroke, center: Pos2, scale_x: f32, scale_y: f32) {
+        for point in &mut stroke.points {
+            let relative = *point - center;
+            point.x = center.x + relative.x * scale_x;
+            point.y = center.y + relative.y * scale_y;
+        }
+        // Scale widths proportionally
+        let avg_scale = (scale_x + scale_y) / 2.0;
+        for width in &mut stroke.widths {
+            *width *= avg_scale;
+        }
+    }
+
+    fn move_stroke_to_center(stroke: &mut CanvasStroke, new_center: Pos2) {
+        let current_center = stroke.bounding_box().center();
+        let offset = new_center - current_center;
+        for point in &mut stroke.points {
+            *point += offset;
+        }
+    }
+}
+
+impl CanvasObjectOps for CanvasStroke {
+    fn transform(
+        &mut self,
+        handle: TransformHandle,
+        delta: egui::Vec2,
+        _drag_start: Pos2,
+        _current_pos: Pos2,
+    ) {
+        let bbox = self.bounding_box();
+        let center = bbox.center();
+
+        // Calculate scale factors
+        let scale_x = if bbox.width() > 0.0 {
+            (bbox.width() + delta.x) / bbox.width()
+        } else {
+            1.0
+        };
+        let scale_y = if bbox.height() > 0.0 {
+            (bbox.height() + delta.y) / bbox.height()
+        } else {
+            1.0
+        };
+
+        match handle {
+            TransformHandle::TopLeft => {
+                let scale = scale_x.min(scale_y);
+                Self::scale_stroke_points(self, center, scale, scale);
+                // Adjust position
+                let new_center = center + delta / 2.0;
+                Self::move_stroke_to_center(self, new_center);
+            }
+            TransformHandle::Top => {
+                Self::scale_stroke_points(self, center, 1.0, scale_y);
+                let new_center = Pos2::new(center.x, center.y + delta.y / 2.0);
+                Self::move_stroke_to_center(self, new_center);
+            }
+            TransformHandle::TopRight => {
+                let scale = scale_x.min(scale_y);
+                Self::scale_stroke_points(self, center, scale, scale);
+                let new_center = center + delta / 2.0;
+                Self::move_stroke_to_center(self, new_center);
+            }
+            TransformHandle::Left => {
+                Self::scale_stroke_points(self, center, scale_x, 1.0);
+                let new_center = Pos2::new(center.x + delta.x / 2.0, center.y);
+                Self::move_stroke_to_center(self, new_center);
+            }
+            TransformHandle::Right => {
+                Self::scale_stroke_points(self, center, scale_x, 1.0);
+                let new_center = Pos2::new(center.x + delta.x / 2.0, center.y);
+                Self::move_stroke_to_center(self, new_center);
+            }
+            TransformHandle::BottomLeft => {
+                let scale = scale_x.min(scale_y);
+                Self::scale_stroke_points(self, center, scale, scale);
+                let new_center = center + delta / 2.0;
+                Self::move_stroke_to_center(self, new_center);
+            }
+            TransformHandle::Bottom => {
+                Self::scale_stroke_points(self, center, 1.0, scale_y);
+                let new_center = Pos2::new(center.x, center.y + delta.y / 2.0);
+                Self::move_stroke_to_center(self, new_center);
+            }
+            TransformHandle::BottomRight => {
+                let scale = scale_x.min(scale_y);
+                Self::scale_stroke_points(self, center, scale, scale);
+                let new_center = center + delta / 2.0;
+                Self::move_stroke_to_center(self, new_center);
+            }
+            TransformHandle::Rotate => {
+                // Calculate rotation angle based on drag
+                let center = bbox.center();
+                let current_angle = (_current_pos - center).angle();
+                let start_angle = (_drag_start - center).angle();
+                let delta_angle = current_angle - start_angle;
+                self.rot += delta_angle;
+            }
+        }
+    }
+
+    fn bounding_box(&self) -> egui::Rect {
         if self.points.is_empty() {
             return egui::Rect::from_min_max(Pos2::ZERO, Pos2::ZERO);
         }
@@ -651,46 +797,61 @@ impl CanvasStroke {
             Pos2::new(max_x + padding, max_y + padding),
         )
     }
-}
 
-impl Draw for CanvasStroke {
-    fn draw(&self, painter: &egui::Painter, selected: bool) {
+    fn paint(&self, painter: &egui::Painter, selected: bool) {
         let color = if selected { Color32::BLUE } else { self.color };
+
+        // Apply rotation if needed
+        let rotated_points: Vec<Pos2> = if self.rot.abs() > 0.001 {
+            let center = self.bounding_box().center();
+            self.points
+                .iter()
+                .map(|p| {
+                    let dx = p.x - center.x;
+                    let dy = p.y - center.y;
+                    let cos_rot = self.rot.cos();
+                    let sin_rot = self.rot.sin();
+                    Pos2::new(
+                        center.x + dx * cos_rot - dy * sin_rot,
+                        center.y + dx * sin_rot + dy * cos_rot,
+                    )
+                })
+                .collect()
+        } else {
+            self.points.clone()
+        };
 
         // 如果所有宽度相同，使用简单路径
         let all_same_width = self.widths.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01);
 
-        if all_same_width && self.points.len() == 1 {
+        if all_same_width && rotated_points.len() == 1 {
             painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
-                self.points[0],
+                rotated_points[0],
                 self.widths[0] / 2.0,
                 color,
             )));
-        } else if all_same_width && self.points.len() == 2 {
+        } else if all_same_width && rotated_points.len() == 2 {
             // 只有两个点且宽度相同，直接画线段
             painter.line_segment(
-                [self.points[0], self.points[1]],
+                [rotated_points[0], rotated_points[1]],
                 Stroke::new(self.widths[0], color),
             );
         } else if all_same_width {
             // 多个点但宽度相同，使用路径
-            let path = egui::epaint::PathShape::line(
-                self.points.clone(),
-                Stroke::new(self.widths[0], color),
-            );
+            let path =
+                egui::epaint::PathShape::line(rotated_points, Stroke::new(self.widths[0], color));
             painter.add(egui::Shape::Path(path));
         } else {
             // 宽度不同，分段绘制
-            for i in 0..self.points.len() - 1 {
+            for i in 0..rotated_points.len() - 1 {
                 let avg_width = (self.widths[i] + self.widths[i + 1]) / 2.0;
                 painter.line_segment(
-                    [self.points[i], self.points[i + 1]],
+                    [rotated_points[i], rotated_points[i + 1]],
                     Stroke::new(avg_width, color),
                 );
             }
         }
 
-        // 如果被选中，绘制边框（类似于形状的实现）
         if selected {
             let stroke_rect = self.bounding_box();
             painter.rect_stroke(
@@ -699,6 +860,7 @@ impl Draw for CanvasStroke {
                 Stroke::new(2.0, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
+            utils::draw_resize_handles(painter, stroke_rect);
         }
     }
 }
@@ -884,7 +1046,7 @@ pub enum HistoryCommand {
     },
 }
 
-// 优化的历史记录结构
+// 历史记录结构
 #[derive(Debug, Clone)]
 pub struct History {
     undo_stack: Vec<HistoryCommand>,
