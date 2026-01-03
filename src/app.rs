@@ -1,20 +1,23 @@
 use crate::render::RenderState;
 use crate::state::{
     AppState, CanvasImage, CanvasObject, CanvasShape, CanvasShapeType, CanvasState, CanvasStroke,
-    CanvasText, CanvasTool, DynamicBrushWidthMode, OptimizationPolicy, PersistentState,
+    CanvasText, CanvasTool, DynamicBrushWidthMode, FONT, ICON, OptimizationPolicy, PersistentState,
     StartupAnimation, ThemeMode, TransformHandle, WindowMode,
 };
-use crate::utils::AppUtils;
+use crate::{UserEvent, utils};
 use core::f32;
 use egui::{Color32, Pos2, Shape, Stroke};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu, wgpu::PresentMode};
+use image::GenericImageView;
 use std::sync::Arc;
 use std::time::Instant;
+use tray_icon::TrayIconBuilder;
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
+use winit::platform::windows::WindowExtWindows;
 use winit::window::{Fullscreen, Window, WindowId};
 
 // 启动动画
@@ -54,11 +57,36 @@ impl App {
     pub async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
 
+        let image = image::load_from_memory(ICON).expect("invalid icon data");
+
+        let rgba = image.to_rgba8().to_vec();
+        let (width, height) = image.dimensions();
+
         // 设置标题
         window.set_title("smartboard");
+        let winit_icon = Some(
+            winit::window::Icon::from_rgba(rgba.clone(), width, height).expect("invalid icon data"),
+        );
+        window.set_window_icon(winit_icon.clone());
+        window.set_taskbar_icon(winit_icon);
+
+        // 获取显示模式
+        self.state.available_video_modes = window
+            .current_monitor()
+            .expect("no monitor found")
+            .video_modes()
+            .collect();
 
         // 设置窗口模式
         self.apply_window_mode(&window);
+
+        // 创建托盘图标
+        let tray = TrayIconBuilder::new()
+            .with_icon(tray_icon::Icon::from_rgba(rgba, width, height).expect("invalid icon data"))
+            .with_tooltip("smartboard")
+            .build()
+            .unwrap();
+        std::mem::forget(tray);
 
         // 获取窗口尺寸
         let size = window.inner_size();
@@ -99,30 +127,28 @@ impl App {
             }
             WindowMode::Fullscreen => {
                 // 全屏模式
-                if let Some(monitor) = window.current_monitor() {
-                    // 使用选中的视频模式，如果没有选中则使用第一个可用的
-                    // if let Some(selected_index) = self.state.selected_video_mode_index {
-                    //     if selected_index < self.state.available_video_modes.len() {
-                    //         if let Some(mode) = self.state.available_video_modes.get(selected_index)
-                    //         {
-                    //             window.set_fullscreen(Some(Fullscreen::Exclusive(mode.clone())));
-                    //             return;
-                    //         }
-                    //     }
-                    // }
-
-                    // 回退到第一个可用的视频模式
-                    let video_mode = monitor.video_modes().next();
-                    if let Some(mode) = video_mode {
-                        window.set_fullscreen(Some(Fullscreen::Exclusive(mode)));
+                // 使用选中的视频模式
+                if let Some(selected_index) = self.state.selected_video_mode_index {
+                    if selected_index < self.state.available_video_modes.len() {
+                        if let Some(mode) = self.state.available_video_modes.get(selected_index) {
+                            window.set_fullscreen(Some(Fullscreen::Exclusive(mode.clone())));
+                            return;
+                        }
                     }
                 }
+
+                // 回退到第一个可用的视频模式
+                window.set_fullscreen(Some(Fullscreen::Exclusive(
+                    self.state
+                        .available_video_modes
+                        .get(0)
+                        .expect("no video mode available")
+                        .clone(),
+                )));
             }
             WindowMode::BorderlessFullscreen => {
                 // 无边框全屏模式
-                if let Some(monitor) = window.current_monitor() {
-                    window.set_fullscreen(Some(Fullscreen::Borderless(Some(monitor))));
-                }
+                window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
             }
         }
     }
@@ -183,12 +209,11 @@ impl App {
     fn resize_image(
         img: &mut CanvasImage,
         handle: TransformHandle,
-        delta: egui::Vec2,
-        drag_start: Pos2,
+        _delta: egui::Vec2,
+        _drag_start: Pos2,
         current_pos: Pos2,
     ) {
         let bbox = img.bounding_box();
-        let center = bbox.center();
 
         match handle {
             TransformHandle::TopLeft => {
@@ -296,8 +321,8 @@ impl App {
         stroke: &mut CanvasStroke,
         handle: TransformHandle,
         delta: egui::Vec2,
-        drag_start: Pos2,
-        current_pos: Pos2,
+        _drag_start: Pos2,
+        _current_pos: Pos2,
     ) {
         let bbox = stroke.bounding_box();
         let center = bbox.center();
@@ -387,6 +412,124 @@ impl App {
         }
     }
 
+    // Convert text to strokes
+    // pub fn rasterize_text_to_strokes(text: &CanvasText) -> Vec<CanvasStroke> {
+    //     let font = fontdue::Font::from_bytes(FONT, fontdue::FontSettings::default()).unwrap();
+
+    //     // let mut strokes = Vec::new();
+
+    //     // let mut cursor_x = 0.0;
+
+    //     // for ch in text.text.chars() {
+    //     //     let (metrics, bitmap) = font.rasterize(ch, text.font_size);
+
+    //     //     let width = metrics.width as usize;
+    //     //     let height = metrics.height as usize;
+
+    //     //     for y in 0..height {
+    //     //         let mut points = Vec::new();
+    //     //         let mut widths = Vec::new();
+
+    //     //         for x in 0..width {
+    //     //             let alpha = bitmap[x + y * width];
+
+    //     //             if alpha > 0 {
+    //     //                 let px = text.pos.x + cursor_x + (x as f32 + metrics.xmin as f32);
+    //     //                 let py = text.pos.y + (y as f32 + metrics.ymin as f32);
+
+    //     //                 points.push(Pos2::new(px, py));
+    //     //                 widths.push(alpha as f32 / 255.0);
+    //     //             } else if !points.is_empty() {
+    //     //                 strokes.push(CanvasStroke {
+    //     //                     points,
+    //     //                     widths,
+    //     //                     color: text.color,
+    //     //                     base_width: text.font_size,
+    //     //                 });
+    //     //                 points = Vec::new();
+    //     //                 widths = Vec::new();
+    //     //             }
+    //     //         }
+
+    //     //         if !points.is_empty() {
+    //     //             strokes.push(CanvasStroke {
+    //     //                 points,
+    //     //                 widths,
+    //     //                 color: text.color,
+    //     //                 base_width: text.font_size,
+    //     //             });
+    //     //         }
+    //     //     }
+
+    //     //     cursor_x += metrics.advance_width;
+    //     // }
+
+    //     // strokes
+
+    //     let mut strokes = Vec::with_capacity(text.text.len() * 4);
+    //     let mut cursor_x = 0.0;
+    //     let inv_255 = 1.0 / 255.0;
+
+    //     let mut points = Vec::with_capacity(32);
+    //     let mut widths = Vec::with_capacity(32);
+
+    //     for ch in text.text.chars() {
+    //         let (metrics, bitmap) = font.rasterize(ch, text.font_size);
+
+    //         if metrics.width == 0 || metrics.height == 0 {
+    //             cursor_x += metrics.advance_width;
+    //             continue;
+    //         }
+
+    //         let width = metrics.width as usize;
+    //         let height = metrics.height as usize;
+
+    //         let base_x = text.pos.x + cursor_x + metrics.xmin as f32;
+    //         let base_y = text.pos.y + metrics.ymin as f32;
+
+    //         for y in 0..height {
+    //             let row_start = y * width;
+    //             let row = &bitmap[row_start..row_start + width];
+
+    //             if row.iter().all(|&a| a == 0) {
+    //                 continue;
+    //             }
+
+    //             points.clear();
+    //             widths.clear();
+
+    //             for (x, &alpha) in row.iter().enumerate() {
+    //                 if alpha > 0 {
+    //                     points.push(Pos2::new(base_x + x as f32, base_y + y as f32));
+    //                     widths.push(alpha as f32 * inv_255);
+    //                 } else if points.len() > 1 {
+    //                     strokes.push(CanvasStroke {
+    //                         points: std::mem::take(&mut points),
+    //                         widths: std::mem::take(&mut widths),
+    //                         color: text.color,
+    //                         base_width: text.font_size,
+    //                     });
+    //                     points.clear();
+    //                     widths.clear();
+    //                 }
+    //             }
+
+    //             if points.len() > 1 {
+    //                 strokes.push(CanvasStroke {
+    //                     points: std::mem::take(&mut points),
+    //                     widths: std::mem::take(&mut widths),
+    //                     color: text.color,
+    //                     base_width: text.font_size,
+    //                 });
+    //             }
+    //         }
+
+    //         cursor_x += metrics.advance_width;
+    //     }
+
+    //     strokes
+    // }
+
     fn handle_resized(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.render_state
@@ -397,14 +540,14 @@ impl App {
     }
 
     fn handle_redraw(&mut self) {
-        if let Some(window) = self.window.as_ref() {
-            if let Some(min) = window.is_minimized() {
-                if min {
-                    println!("Window is minimized");
-                    return;
-                }
-            }
-        }
+        // if let Some(window) = self.window.as_ref() {
+        //     if let Some(min) = window.is_minimized() {
+        //         if min {
+        //             println!("Window is minimized");
+        //             return;
+        //         }
+        //     }
+        // }
 
         let render_state = self.render_state.as_mut().unwrap();
 
@@ -420,6 +563,10 @@ impl App {
         let surface_texture = render_state.surface.get_current_texture();
 
         match surface_texture {
+            Err(SurfaceError::Lost) => {
+                println!("wgpu surface lost");
+                return;
+            }
             Err(SurfaceError::Outdated) => {
                 // Ignoring outdated to allow resizing and minimization
                 println!("wgpu surface outdated");
@@ -475,19 +622,6 @@ impl App {
                 });
             }
         }
-
-        // 更新可用的视频模式
-        // let window_ref = self.window.as_ref().unwrap();
-        // if let Some(monitor) = window_ref.current_monitor() {
-        //     self.state.available_video_modes = monitor.video_modes().collect();
-
-        //     // 如果没有选中的视频模式，默认选择第一个
-        //     if self.state.selected_video_mode_index.is_none()
-        //         && !self.state.available_video_modes.is_empty()
-        //     {
-        //         self.state.selected_video_mode_index = Some(0);
-        //     }
-        // }
 
         if let Some(anim) = &mut self.state.startup_animation {
             if !anim.is_finished() {
@@ -670,6 +804,44 @@ impl App {
                                     }
                                 }
                             }
+
+                            // 检查是否选中了文本对象
+                            if let Some(selected_idx) = self.state.selected_object {
+                                if let Some(CanvasObject::Text(_)) =
+                                    self.state.canvas.objects.get(selected_idx)
+                                {
+                                    if ui.button("栅格化").clicked() {
+                                        // 获取文本对象副本以避免借用冲突
+                                        if let Some(text_obj) =
+                                            self.state.canvas.objects.get(selected_idx).cloned()
+                                        {
+                                            if let CanvasObject::Text(text) = &text_obj {
+                                                // Save state to history before modification
+                                                self.state.history.save_state(&self.state.canvas);
+
+                                                // 转换文本为笔画
+                                                let strokes =
+                                                    crate::utils::rasterize_text(text, FONT);
+                                                for stroke in strokes {
+                                                    self.state
+                                                        .canvas
+                                                        .objects
+                                                        .push(CanvasObject::Stroke(stroke));
+                                                }
+
+                                                // 删除原文本对象
+                                                self.state.canvas.objects.remove(selected_idx);
+                                                self.state
+                                                    .history
+                                                    .save_remove_object(selected_idx, text_obj);
+
+                                                self.state.selected_object = None;
+                                                self.state.toasts.success("已转换为笔画!");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         });
                     } else {
                         ui.label(egui::RichText::new("(未选中对象)").italics());
@@ -815,7 +987,7 @@ impl App {
                                     let img = if img.width() > MAX_TEXTURE_SIZE
                                         || img.height() > MAX_TEXTURE_SIZE
                                     {
-                                        crate::utils::AppUtils::resize_image_for_texture(
+                                        crate::utils::resize_image_for_texture(
                                             img,
                                             MAX_TEXTURE_SIZE,
                                         )
@@ -852,18 +1024,20 @@ impl App {
                                             marked_for_deletion: false,
                                         },
                                     ));
+
+                                    self.state.current_tool = CanvasTool::Select;
                                 }
                             }
                         }
                         if ui.button("文本").clicked() {
-                            self.state.show_text_dialog = true;
+                            self.state.show_insert_text_dialog = true;
                         }
                         if ui.button("形状").clicked() {
-                            self.state.show_shape_dialog = true;
+                            self.state.show_insert_shape_dialog = true;
                         }
                     });
 
-                    if self.state.show_text_dialog {
+                    if self.state.show_insert_text_dialog {
                         // 计算屏幕中心位置
                         let content_rect = ctx.available_rect();
                         let center_pos = content_rect.center();
@@ -891,19 +1065,20 @@ impl App {
                                                 font_size: 16.0,
                                             },
                                         ));
-                                        self.state.show_text_dialog = false;
+                                        self.state.current_tool = CanvasTool::Select;
+                                        self.state.show_insert_text_dialog = false;
                                         self.state.new_text_content.clear();
                                     }
 
                                     if ui.button("取消").clicked() {
-                                        self.state.show_text_dialog = false;
+                                        self.state.show_insert_text_dialog = false;
                                         self.state.new_text_content.clear();
                                     }
                                 });
                             });
                     }
 
-                    if self.state.show_shape_dialog {
+                    if self.state.show_insert_shape_dialog {
                         // 计算屏幕中心位置
                         let content_rect = ctx.available_rect();
                         let center_pos = content_rect.center();
@@ -929,7 +1104,7 @@ impl App {
                                                 rotation: 0.0,
                                             },
                                         ));
-                                        self.state.show_shape_dialog =
+                                        self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
 
@@ -945,7 +1120,7 @@ impl App {
                                                 rotation: 0.0,
                                             },
                                         ));
-                                        self.state.show_shape_dialog =
+                                        self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
 
@@ -961,7 +1136,7 @@ impl App {
                                                 rotation: 0.0,
                                             },
                                         ));
-                                        self.state.show_shape_dialog =
+                                        self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
                                     if ui.button("三角形").clicked() {
@@ -976,7 +1151,7 @@ impl App {
                                                 rotation: 0.0,
                                             },
                                         ));
-                                        self.state.show_shape_dialog =
+                                        self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
 
@@ -992,14 +1167,14 @@ impl App {
                                                 rotation: 0.0,
                                             },
                                         ));
-                                        self.state.show_shape_dialog =
+                                        self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
                                 });
 
                                 ui.horizontal(|ui| {
                                     if ui.button("取消").clicked() {
-                                        self.state.show_shape_dialog = false;
+                                        self.state.show_insert_shape_dialog = false;
                                     }
                                     ui.checkbox(
                                         &mut self.state.persistent.keep_insertion_window_open,
@@ -1197,7 +1372,7 @@ impl App {
                                             self.state.show_quick_color_editor = false;
                                             // 重置为默认颜色
                                             self.state.persistent.quick_colors =
-                                                AppUtils::get_default_quick_colors();
+                                                utils::get_default_quick_colors();
                                         }
                                     });
                                 });
@@ -1236,69 +1411,53 @@ impl App {
                         });
 
                         // 显示模式选择（仅在全屏模式下可用）
-                        // ui.horizontal(|ui| {
-                        //     ui.label("显示模式:");
+                        ui.horizontal(|ui| {
+                            ui.label("显示模式:");
 
-                        //     // 创建一个可变引用用于选择
-                        //     let mut current_selection: usize =
-                        //         self.state.selected_video_mode_index.unwrap_or(0);
+                            // 显示当前选择的视频模式
+                            if self.state.persistent.window_mode == WindowMode::Fullscreen {
+                                let mut current_selection =
+                                    self.state.selected_video_mode_index.unwrap_or(0);
 
-                        //     // 显示当前选择的视频模式
-                        //     // if self.state.persistent_state.window_mode == WindowMode::Fullscreen {
-                        //     let video_modes = self.state.available_video_modes.clone();
+                                let mode = &self.state.available_video_modes[current_selection];
+                                let mode_text = format!(
+                                    "{}x{} @ {}Hz",
+                                    mode.size().width,
+                                    mode.size().height,
+                                    mode.refresh_rate_millihertz() as f32 / 1000.0
+                                );
 
-                        //     if let Some(mode) = video_modes.get(current_selection) {
-                        //         let mode_text = format!(
-                        //             "{}x{} @ {}Hz",
-                        //             mode.size().width,
-                        //             mode.size().height,
-                        //             mode.refresh_rate_millihertz() as f32 / 1000.0
-                        //         );
-                        //         ui.label(mode_text);
-                        //     }
-
-                        //     egui::ComboBox::from_id_salt("video_mode_selection").show_ui(
-                        //         ui,
-                        //         |ui| {
-                        //             // 显示所有可用的视频模式
-                        //             for (index, mode) in video_modes.iter().enumerate() {
-                        //                 let mode_text = format!(
-                        //                     "{}x{} @ {}Hz",
-                        //                     mode.size().width,
-                        //                     mode.size().height,
-                        //                     mode.refresh_rate_millihertz() as f32 / 1000.0
-                        //                 );
-                        //                 ui.selectable_value(
-                        //                     &mut current_selection,
-                        //                     index,
-                        //                     mode_text,
-                        //                 );
-                        //             }
-                        //         },
-                        //     );
-                        //     // } else {
-                        //     //     // 非全屏模式下显示当前模式但不允许更改
-                        //     //     if let Some(mode) =
-                        //     //         self.state.available_video_modes.get(current_selection)
-                        //     //     {
-                        //     //         let mode_text = format!(
-                        //     //             "{}x{} @ {}Hz",
-                        //     //             mode.size().width,
-                        //     //             mode.size().height,
-                        //     //             mode.refresh_rate_millihertz() as f32 / 1000.0
-                        //     //         );
-                        //     //         ui.label(mode_text);
-                        //     //     }
-                        //     // }
-
-                        //     // 更新选择
-                        //     self.state.selected_video_mode_index = Some(current_selection);
-
-                        //     // 如果在全屏模式下更改了显示模式，立即应用更改
-                        //     if self.state.persistent_state.window_mode == WindowMode::Fullscreen {
-                        //         self.state.persistent_state.window_mode_changed = true;
-                        //     }
-                        // });
+                                egui::ComboBox::from_id_salt("video_mode_selection")
+                                    .selected_text(mode_text)
+                                    .show_ui(ui, |ui| {
+                                        for (index, mode) in
+                                            self.state.available_video_modes.iter().enumerate()
+                                        {
+                                            let mode_text = format!(
+                                                "{}x{} @ {}Hz",
+                                                mode.size().width,
+                                                mode.size().height,
+                                                mode.refresh_rate_millihertz() as f32 / 1000.0
+                                            );
+                                            if ui
+                                                .selectable_value(
+                                                    &mut current_selection,
+                                                    index,
+                                                    mode_text,
+                                                )
+                                                .changed()
+                                            {
+                                                // 更新选择
+                                                self.state.selected_video_mode_index =
+                                                    Some(current_selection);
+                                                self.state.window_mode_changed = true;
+                                            }
+                                        }
+                                    });
+                            } else {
+                                ui.label(egui::RichText::new("(仅在全屏模式下可切换)").italics());
+                            }
+                        });
 
                         // 垂直同步模式选择
                         ui.horizontal(|ui| {
@@ -1508,6 +1667,14 @@ impl App {
                     if ui.button("退出").clicked() {
                         self.state.should_quit = true;
                     }
+
+                    if ui.button("最小化").clicked() {
+                        self.window
+                            .as_ref()
+                            .expect("no window??")
+                            .set_visible(false);
+                    }
+
                     if self.state.persistent.show_fps {
                         ui.label(format!(
                             "FPS: {}",
@@ -1583,7 +1750,7 @@ impl App {
             if self.state.show_size_preview {
                 let content_rect = ui.ctx().available_rect();
                 let pos = content_rect.center();
-                AppUtils::draw_size_preview(
+                utils::draw_size_preview(
                     painter,
                     pos,
                     match self.state.current_tool {
@@ -1673,7 +1840,7 @@ impl App {
                                 if let Some(object) = self.state.canvas.objects.get(selected_idx) {
                                     let bbox = object.bounding_box();
                                     if let Some(handle) =
-                                        AppUtils::get_transform_handle_at_pos(bbox, pos)
+                                        utils::get_transform_handle_at_pos(bbox, pos)
                                     {
                                         self.state.dragged_handle = Some(handle);
                                     }
@@ -1747,7 +1914,7 @@ impl App {
                     if response.drag_started() || response.clicked() || response.dragged() {
                         if let Some(pos) = pointer_pos {
                             // 绘制指针
-                            AppUtils::draw_size_preview(painter, pos, self.state.eraser_size);
+                            utils::draw_size_preview(painter, pos, self.state.eraser_size);
 
                             // 从后往前删除，避免索引问题
                             let mut to_remove = Vec::new();
@@ -1781,7 +1948,7 @@ impl App {
                                         }
                                     }
                                     CanvasObject::Stroke(stroke) => {
-                                        if AppUtils::point_intersects_stroke(
+                                        if utils::point_intersects_stroke(
                                             pos,
                                             stroke,
                                             self.state.eraser_size,
@@ -1813,7 +1980,7 @@ impl App {
                     if response.dragged() || response.clicked() {
                         if let Some(pos) = pointer_pos {
                             // 绘制指针
-                            AppUtils::draw_size_preview(painter, pos, self.state.eraser_size);
+                            utils::draw_size_preview(painter, pos, self.state.eraser_size);
 
                             // 从所有笔画中移除被橡皮擦覆盖的段落
                             let eraser_radius = self.state.eraser_size / 2.0;
@@ -1848,7 +2015,7 @@ impl App {
 
                                         // 计算点到线段的距离
                                         let dist =
-                                            AppUtils::point_to_line_segment_distance(pos, p1, p2);
+                                            utils::point_to_line_segment_distance(pos, p1, p2);
 
                                         // 如果段落不被橡皮擦覆盖，保留第二个点
                                         if dist > eraser_radius + segment_width / 2.0 {
@@ -1943,7 +2110,7 @@ impl App {
                             {
                                 self.state.is_drawing = true;
                                 let start_time = Instant::now();
-                                let width = AppUtils::calculate_dynamic_width(
+                                let width = utils::calculate_dynamic_width(
                                     self.state.brush_width,
                                     self.state.dynamic_brush_width_mode,
                                     0,
@@ -1999,7 +2166,7 @@ impl App {
                                         active_stroke.times.push(current_time);
 
                                         // 计算动态宽度
-                                        let width = AppUtils::calculate_dynamic_width(
+                                        let width = utils::calculate_dynamic_width(
                                             self.state.brush_width,
                                             self.state.dynamic_brush_width_mode,
                                             active_stroke.points.len() - 1,
@@ -2024,14 +2191,14 @@ impl App {
                                 if active_stroke.widths.len() == active_stroke.points.len() {
                                     // 应用笔画平滑
                                     let final_points = if self.state.persistent.stroke_smoothing {
-                                        AppUtils::apply_stroke_smoothing(&active_stroke.points)
+                                        utils::apply_stroke_smoothing(&active_stroke.points)
                                     } else {
                                         active_stroke.points
                                     };
 
                                     // 应用插值
                                     let (interpolated_points, interpolated_widths) =
-                                        AppUtils::apply_point_interpolation(
+                                        utils::apply_point_interpolation(
                                             &final_points,
                                             &active_stroke.widths,
                                             self.state.persistent.interpolation_frequency,
@@ -2091,7 +2258,7 @@ impl App {
                                         active_stroke.last_movement_time.elapsed().as_secs_f32();
                                     if time_since_last_movement > 0.5 {
                                         // 拉直笔画
-                                        let straightened_points = AppUtils::straighten_stroke(
+                                        let straightened_points = utils::straighten_stroke(
                                             &active_stroke.points,
                                             self.state.persistent.stroke_straightening_tolerance,
                                         );
@@ -2139,7 +2306,7 @@ impl App {
                                     active_stroke.points.push(pos);
                                     active_stroke.times.push(current_time);
 
-                                    let width = AppUtils::calculate_dynamic_width(
+                                    let width = utils::calculate_dynamic_width(
                                         self.state.brush_width,
                                         self.state.dynamic_brush_width_mode,
                                         active_stroke.points.len() - 1,
@@ -2200,12 +2367,25 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = event_loop
             .create_window(Window::default_attributes())
             .unwrap();
         pollster::block_on(self.set_window(window));
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::TrayIconEvent(event) => match event {
+                tray_icon::TrayIconEvent::Click { .. } => {
+                    let window = self.window.as_ref().expect("no window??");
+                    window.set_visible(true);
+                    window.focus_window();
+                }
+                _ => {}
+            },
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -2270,7 +2450,7 @@ impl ApplicationHandler for App {
                         if self.state.current_tool == CanvasTool::Brush {
                             self.state.is_drawing = true;
                             let start_time = Instant::now();
-                            let width = AppUtils::calculate_dynamic_width(
+                            let width = utils::calculate_dynamic_width(
                                 self.state.brush_width,
                                 self.state.dynamic_brush_width_mode,
                                 0,
@@ -2324,7 +2504,7 @@ impl ApplicationHandler for App {
                                     active_stroke.times.push(current_time);
 
                                     // 计算动态宽度
-                                    let width = AppUtils::calculate_dynamic_width(
+                                    let width = utils::calculate_dynamic_width(
                                         self.state.brush_width,
                                         self.state.dynamic_brush_width_mode,
                                         active_stroke.points.len() - 1,
@@ -2348,14 +2528,14 @@ impl ApplicationHandler for App {
                                 if active_stroke.widths.len() == active_stroke.points.len() {
                                     // 应用笔画平滑
                                     let final_points = if self.state.persistent.stroke_smoothing {
-                                        AppUtils::apply_stroke_smoothing(&active_stroke.points)
+                                        utils::apply_stroke_smoothing(&active_stroke.points)
                                     } else {
                                         active_stroke.points
                                     };
 
                                     // 应用插值
                                     let (interpolated_points, interpolated_widths) =
-                                        AppUtils::apply_point_interpolation(
+                                        utils::apply_point_interpolation(
                                             &final_points,
                                             &active_stroke.widths,
                                             self.state.persistent.interpolation_frequency,

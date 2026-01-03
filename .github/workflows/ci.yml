@@ -67,11 +67,14 @@ jobs:
         run: |
           brew update
 
-      - name: Build (debug)
+      - name: Build debug
         run: cargo build --verbose
 
-      - name: Build (release)
+      - name: Build release
         run: cargo build --release --verbose
+
+      - name: Build small release
+        run: cargo build --profile=release-small --verbose
 
       - name: Upload debug artifacts
         uses: actions/upload-artifact@v6
@@ -85,4 +88,11 @@ jobs:
         with:
           name: release-${{ matrix.name }}
           path: target/release/smartboard*
+          if-no-files-found: error
+
+      - name: Upload small release artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-${{ matrix.name }}
+          path: target/release-small/smartboard*
           if-no-files-found: error
