@@ -677,3 +677,7 @@ impl OutlineBuilder for StrokeBuilder {
         }
     }
 }
+
+// pub fn exp_ease(a: f32, t: f32) -> f32 {
+//     (a.powf(t) - 1.0) / (a - 1.0)
+// }

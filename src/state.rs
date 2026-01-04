@@ -586,6 +586,8 @@ pub struct PersistentState {
     pub present_mode: PresentMode,
     #[serde(default)]
     pub optimization_policy: OptimizationPolicy,
+    #[serde(default)]
+    pub low_latency_mode: bool,
 
     #[serde(default)]
     pub keep_insertion_window_open: bool,
@@ -597,6 +599,8 @@ pub struct PersistentState {
 
     #[serde(default)]
     pub easter_egg_redo: bool,
+    #[serde(default)]
+    pub easter_egg_yuzu_welcome: bool,
 }
 
 impl Default for PersistentState {
@@ -616,6 +620,7 @@ impl Default for PersistentState {
             window_mode: WindowMode::default(),
             present_mode: PresentMode::AutoVsync,
             optimization_policy: OptimizationPolicy::default(),
+            low_latency_mode: false,
 
             keep_insertion_window_open: true,
 
@@ -623,6 +628,7 @@ impl Default for PersistentState {
             show_startup_animation: true,
 
             easter_egg_redo: false,
+            easter_egg_yuzu_welcome: false,
         }
     }
 }
@@ -1449,4 +1455,4 @@ impl Default for AppState {
 }
 
 pub const FONT: &[u8] = include_bytes!("../assets/fonts/NotoSansCJKsc-Regular.otf");
-pub const ICON: &[u8] = include_bytes!("../assets/images/icon.ico");
+pub const ICON: &[u8] = include_bytes!("../assets/images/app_icon/icon.ico");
