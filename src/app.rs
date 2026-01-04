@@ -17,6 +17,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
+#[cfg(target_os = "windows")]
 use winit::platform::windows::WindowExtWindows;
 use winit::window::{Fullscreen, Window, WindowId};
 
@@ -102,6 +103,7 @@ impl App {
             winit::window::Icon::from_rgba(rgba.clone(), width, height).expect("invalid icon data"),
         );
         window.set_window_icon(winit_icon.clone());
+        #[cfg(target_os = "windows")]
         window.set_taskbar_icon(winit_icon);
 
         // 获取显示模式
