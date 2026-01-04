@@ -1,4 +1,4 @@
-# sartboard
+# smartboard
 
 reinventing the wheel because ~~others suck~~ why not
 
