@@ -93,6 +93,6 @@ jobs:
       - name: Upload small release artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: release-${{ matrix.name }}
+          name: release-small-${{ matrix.name }}
           path: target/release-small/smartboard*
           if-no-files-found: error
