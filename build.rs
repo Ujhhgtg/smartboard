@@ -1,6 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
+    // --- 1. startup animation ---
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let frames_dir = manifest_dir
@@ -33,4 +34,12 @@ fn main() {
     code.push_str("];\n");
 
     fs::write(out_dir.join("startup_frames.rs"), code).unwrap();
+
+    // --- 2. executable icon (windows only) ---
+    #[cfg(target_os = "windows")]
+    {
+        let mut res = winres::WindowsResource::new();
+        res.set_icon("./assets/images/app_icon/icon.ico");
+        res.compile().unwrap();
+    }
 }

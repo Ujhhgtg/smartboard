@@ -43,6 +43,7 @@ tray-icon = "*"
 
 [build-dependencies]
 shellexpand = "*"
+winres = "*"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "*", features = ["Win32_System_Console"] }

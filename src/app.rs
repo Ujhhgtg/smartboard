@@ -6,7 +6,7 @@ use crate::state::{
 };
 use crate::{UserEvent, utils};
 use core::f32;
-use egui::{Color32, Pos2, Shape, Stroke};
+use egui::{Color32, Pos2, Stroke};
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu, wgpu::PresentMode};
 use image::GenericImageView;
@@ -92,10 +92,10 @@ impl App {
     pub async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
 
-        let image = image::load_from_memory(ICON).expect("invalid icon data");
+        let icon = image::load_from_memory(ICON).expect("invalid icon data");
 
-        let rgba = image.to_rgba8().to_vec();
-        let (width, height) = image.dimensions();
+        let rgba = icon.to_rgba8().to_vec();
+        let (width, height) = icon.dimensions();
 
         // 设置标题
         window.set_title("smartboard");
@@ -122,7 +122,8 @@ impl App {
             .with_tooltip("smartboard")
             .build()
             .unwrap();
-        std::mem::forget(tray);
+        let _ = tray.set_visible(false);
+        self.state.tray = Some(tray);
 
         // 获取窗口尺寸
         let size = window.inner_size();
@@ -148,21 +149,22 @@ impl App {
         self.render_state.get_or_insert(state);
     }
 
-    fn exit(&self, event_loop: &ActiveEventLoop) {
+    fn exit(&mut self, event_loop: &ActiveEventLoop) {
         if let Err(err) = self.state.persistent.save_to_file() {
             eprintln!("Failed to save settings: {}", err)
         }
+        self.state.tray.take(); // closes tray
         event_loop.exit();
     }
 
     fn apply_window_mode(&self, window: &Arc<Window>) {
         match self.state.persistent.window_mode {
             WindowMode::Windowed => {
-                // 窗口模式
+                // 窗口化
                 window.set_fullscreen(None);
             }
             WindowMode::Fullscreen => {
-                // 全屏模式
+                // 全屏
                 // 使用选中的视频模式
                 if let Some(selected_index) = self.state.selected_video_mode_index {
                     if selected_index < self.state.available_video_modes.len() {
@@ -183,7 +185,7 @@ impl App {
                 )));
             }
             WindowMode::BorderlessFullscreen => {
-                // 无边框全屏模式
+                // 无边框全屏
                 window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
             }
         }
@@ -1603,6 +1605,9 @@ impl App {
                             .as_ref()
                             .expect("no window??")
                             .set_visible(false);
+                        // if let Some(tray) = &self.state.tray {
+                        //     let _ = tray.set_visible(true);
+                        // }
                     }
 
                     if self.state.persistent.show_fps {
@@ -1655,28 +1660,40 @@ impl App {
                         .windows(2)
                         .all(|w| (w[0] - w[1]).abs() < 0.01);
 
-                    if all_same_width && active_stroke.points.len() == 2 {
-                        // 只有两个点且宽度相同
-                        painter.line_segment(
-                            [active_stroke.points[0], active_stroke.points[1]],
-                            Stroke::new(active_stroke.widths[0], self.state.brush_color),
-                        );
-                    } else if all_same_width {
-                        // 多个点但宽度相同
-                        let path = egui::epaint::PathShape::line(
-                            active_stroke.points.clone(),
-                            Stroke::new(active_stroke.widths[0], self.state.brush_color),
-                        );
-                        painter.add(Shape::Path(path));
-                    } else {
-                        // 宽度不同，分段绘制
-                        for i in 0..active_stroke.points.len() - 1 {
-                            let avg_width =
-                                (active_stroke.widths[i] + active_stroke.widths[i + 1]) / 2.0;
+                    painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
+                        active_stroke.points[0],
+                        active_stroke.widths[0] / 2.0,
+                        self.state.brush_color,
+                    )));
+                    if active_stroke.points.len() >= 2 {
+                        painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
+                            active_stroke.points[active_stroke.points.len() - 1],
+                            active_stroke.widths[active_stroke.points.len() - 1] / 2.0,
+                            self.state.brush_color,
+                        )));
+                        if all_same_width && active_stroke.points.len() == 2 {
+                            // 只有两个点且宽度相同，直接画线段
                             painter.line_segment(
-                                [active_stroke.points[i], active_stroke.points[i + 1]],
-                                Stroke::new(avg_width, self.state.brush_color),
+                                [active_stroke.points[0], active_stroke.points[1]],
+                                Stroke::new(active_stroke.widths[0], self.state.brush_color),
                             );
+                        } else if all_same_width {
+                            // 多个点但宽度相同，使用路径
+                            let path = egui::epaint::PathShape::line(
+                                active_stroke.points.clone(),
+                                Stroke::new(active_stroke.widths[0], self.state.brush_color),
+                            );
+                            painter.add(egui::Shape::Path(path));
+                        } else {
+                            // 宽度不同，分段绘制
+                            for i in 0..active_stroke.points.len() - 1 {
+                                let avg_width =
+                                    (active_stroke.widths[i] + active_stroke.widths[i + 1]) / 2.0;
+                                painter.line_segment(
+                                    [active_stroke.points[i], active_stroke.points[i + 1]],
+                                    Stroke::new(avg_width, self.state.brush_color),
+                                );
+                            }
                         }
                     }
                 }
@@ -2321,6 +2338,9 @@ impl ApplicationHandler<UserEvent> for App {
                     let window = self.window.as_ref().expect("no window??");
                     window.set_visible(true);
                     window.focus_window();
+                    if let Some(tray) = &self.state.tray {
+                        let _ = tray.set_visible(false);
+                    }
                 }
                 _ => {}
             },
