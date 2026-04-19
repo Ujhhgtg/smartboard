@@ -3,8 +3,9 @@ use egui::Pos2;
 use egui::Stroke;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use egui_notify::Toasts;
-use rodio::OutputStreamBuilder;
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::Decoder;
+use rodio::DeviceSinkBuilder;
+use rodio::Player;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -442,6 +443,32 @@ impl CanvasObject {
                     *point += delta;
                 }
             }
+        }
+    }
+
+    // Helper function to extract transform information
+    pub fn get_transform(&self) -> ObjectTransform {
+        match self {
+            CanvasObject::Image(img) => ObjectTransform {
+                pos: img.pos,
+                size: img.size,
+                rotation: img.rot,
+            },
+            CanvasObject::Text(text) => ObjectTransform {
+                pos: text.pos,
+                size: egui::vec2(text.font_size, text.font_size), // Using font_size for both dimensions
+                rotation: text.rot,
+            },
+            CanvasObject::Shape(shape) => ObjectTransform {
+                pos: shape.pos,
+                size: egui::vec2(shape.size, shape.size), // Using shape.size for both dimensions
+                rotation: shape.rotation,
+            },
+            CanvasObject::Stroke(_stroke) => ObjectTransform {
+                pos: egui::Pos2::new(0.0, 0.0), // Strokes don't have a single position
+                size: egui::Vec2::new(0.0, 0.0), // Strokes don't have a single size
+                rotation: 0.0,                  // Strokes handle rotation differently
+            },
         }
     }
 }
@@ -931,8 +958,7 @@ pub struct StartupAnimation {
     last_frame_index: usize,
 
     // Audio
-    _audio_stream: Option<OutputStream>,
-    _audio_sink: Option<Sink>,
+    _audio_sink: Option<Player>,
 
     finished: bool,
 }
@@ -945,27 +971,25 @@ impl StartupAnimation {
             frames,
             texture: None,
             last_frame_index: usize::MAX,
-            _audio_stream: None,
             _audio_sink: Some(Self::play_audio(audio)),
             finished: false,
         }
     }
 
-    fn play_audio(audio: &'static [u8]) -> Sink {
-        let stream = OutputStreamBuilder::open_default_stream().expect("Failed to open stream");
+    fn play_audio(audio: &'static [u8]) -> Player {
+        let handle = DeviceSinkBuilder::open_default_sink().expect("Failed to open stream");
 
-        let sink = Sink::connect_new(&stream.mixer());
+        let player = Player::connect_new(&handle.mixer());
 
         let cursor = Cursor::new(audio);
         let source = Decoder::new(cursor).unwrap();
 
-        sink.append(source);
-        sink.play();
+        handle.mixer().add(source);
 
         // keep stream alive
-        std::mem::forget(stream);
+        std::mem::forget(handle);
 
-        sink
+        player
     }
 
     pub fn update(&mut self, ctx: &Context) {
@@ -1059,6 +1083,26 @@ pub enum HistoryCommand {
     ClearObjects {
         objects: Vec<CanvasObject>,
     },
+    // 移动对象命令
+    MoveObject {
+        index: usize,
+        old_position: egui::Vec2,
+        new_position: egui::Vec2,
+    },
+    // 变换对象命令
+    TransformObject {
+        index: usize,
+        old_transform: ObjectTransform,
+        new_transform: ObjectTransform,
+    },
+}
+
+// 对象变换信息
+#[derive(Debug, Clone)]
+pub struct ObjectTransform {
+    pub pos: egui::Pos2,
+    pub size: egui::Vec2,
+    pub rotation: f32,
 }
 
 // 历史记录结构
@@ -1067,8 +1111,6 @@ pub struct History {
     undo_stack: Vec<HistoryCommand>,
     redo_stack: Vec<HistoryCommand>,
     max_history_size: usize,
-    memory_usage: usize,
-    max_memory_usage: usize, // 最大内存使用量 (字节)
 }
 
 impl History {
@@ -1077,161 +1119,68 @@ impl History {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             max_history_size,
-            memory_usage: 0,
-            max_memory_usage: 50 * 1024 * 1024, // 默认 50MB
-        }
-    }
-
-    // 估算命令的内存使用量
-    fn estimate_command_size(command: &HistoryCommand) -> usize {
-        match command {
-            HistoryCommand::AddObject { object, .. } => {
-                // 估算对象大小
-                match object {
-                    CanvasObject::Stroke(stroke) => {
-                        stroke.points.len() * std::mem::size_of::<Pos2>()
-                            + stroke.widths.len() * std::mem::size_of::<f32>()
-                            + 128 // 其他字段
-                    }
-                    CanvasObject::Image(_) => 256, // 图像对象相对较小（不包含纹理数据）
-                    CanvasObject::Text(text) => text.text.len() + 128,
-                    CanvasObject::Shape(_) => 128,
-                }
-            }
-            HistoryCommand::RemoveObject { object, .. } => {
-                Self::estimate_command_size(&HistoryCommand::AddObject {
-                    index: 0,
-                    object: object.clone(),
-                })
-            }
-            HistoryCommand::ModifyObject {
-                old_object,
-                new_object,
-                ..
-            } => {
-                Self::estimate_command_size(&HistoryCommand::AddObject {
-                    index: 0,
-                    object: old_object.clone(),
-                }) + Self::estimate_command_size(&HistoryCommand::AddObject {
-                    index: 0,
-                    object: new_object.clone(),
-                })
-            }
-            HistoryCommand::ClearObjects { objects } => objects
-                .iter()
-                .map(|obj| {
-                    Self::estimate_command_size(&HistoryCommand::AddObject {
-                        index: 0,
-                        object: obj.clone(),
-                    })
-                })
-                .sum(),
-        }
-    }
-
-    // 清理历史记录以保持内存限制
-    fn enforce_memory_limit(&mut self) {
-        while self.memory_usage > self.max_memory_usage && !self.undo_stack.is_empty() {
-            let removed_command = self.undo_stack.remove(0);
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&removed_command));
         }
     }
 
     // 保存添加对象的命令
     pub fn save_add_object(&mut self, index: usize, object: CanvasObject) {
         let command = HistoryCommand::AddObject { index, object };
-        self.memory_usage += Self::estimate_command_size(&command);
-        self.undo_stack.push(command);
-
-        // 清理超出限制的历史记录
-        if self.undo_stack.len() > self.max_history_size {
-            let removed_command = self.undo_stack.remove(0);
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&removed_command));
-        }
-        self.enforce_memory_limit();
-
-        // 清空重做栈
-        for cmd in self.redo_stack.drain(..) {
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&cmd));
-        }
+        self.push_command(command);
     }
 
     // 保存删除对象的命令
     pub fn save_remove_object(&mut self, index: usize, object: CanvasObject) {
         let command = HistoryCommand::RemoveObject { index, object };
-        self.memory_usage += Self::estimate_command_size(&command);
-        self.undo_stack.push(command);
-
-        if self.undo_stack.len() > self.max_history_size {
-            let removed_command = self.undo_stack.remove(0);
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&removed_command));
-        }
-        self.enforce_memory_limit();
-
-        for cmd in self.redo_stack.drain(..) {
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&cmd));
-        }
-    }
-
-    // 保存修改对象的命令
-    pub fn save_modify_object(
-        &mut self,
-        index: usize,
-        old_object: CanvasObject,
-        new_object: CanvasObject,
-    ) {
-        let command = HistoryCommand::ModifyObject {
-            index,
-            old_object,
-            new_object,
-        };
-        self.memory_usage += Self::estimate_command_size(&command);
-        self.undo_stack.push(command);
-
-        if self.undo_stack.len() > self.max_history_size {
-            let removed_command = self.undo_stack.remove(0);
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&removed_command));
-        }
-        self.enforce_memory_limit();
-
-        for cmd in self.redo_stack.drain(..) {
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&cmd));
-        }
+        self.push_command(command);
     }
 
     // 保存清空对象的命令
     pub fn save_clear_objects(&mut self, objects: Vec<CanvasObject>) {
         let command = HistoryCommand::ClearObjects { objects };
-        self.memory_usage += Self::estimate_command_size(&command);
+        self.push_command(command);
+    }
+
+    // 保存移动对象的命令
+    pub fn save_move_object(
+        &mut self,
+        index: usize,
+        old_position: egui::Vec2,
+        new_position: egui::Vec2,
+    ) {
+        let command = HistoryCommand::MoveObject {
+            index,
+            old_position,
+            new_position,
+        };
+        self.push_command(command);
+    }
+
+    // 保存变换对象的命令
+    pub fn save_transform_object(
+        &mut self,
+        index: usize,
+        old_transform: ObjectTransform,
+        new_transform: ObjectTransform,
+    ) {
+        let command = HistoryCommand::TransformObject {
+            index,
+            old_transform,
+            new_transform,
+        };
+        self.push_command(command);
+    }
+
+    // 内部方法：推送命令并维护历史记录大小
+    fn push_command(&mut self, command: HistoryCommand) {
         self.undo_stack.push(command);
 
+        // 清理超出限制的历史记录
         if self.undo_stack.len() > self.max_history_size {
-            let removed_command = self.undo_stack.remove(0);
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&removed_command));
+            self.undo_stack.remove(0);
         }
-        self.enforce_memory_limit();
 
-        for cmd in self.redo_stack.drain(..) {
-            self.memory_usage = self
-                .memory_usage
-                .saturating_sub(Self::estimate_command_size(&cmd));
-        }
+        // 清空重做栈，因为有新的操作
+        self.redo_stack.clear();
     }
 
     // 执行撤销操作
@@ -1244,7 +1193,6 @@ impl History {
                         current_state.objects.remove(index);
                         // 将撤销操作的逆操作推送到重做栈
                         let inverse_cmd = HistoryCommand::RemoveObject { index, object };
-                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
                         self.redo_stack.push(inverse_cmd);
                     }
                 }
@@ -1254,7 +1202,6 @@ impl History {
                         current_state.objects.insert(index, object.clone());
                         // 将撤销操作的逆操作推送到重做栈
                         let inverse_cmd = HistoryCommand::AddObject { index, object };
-                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
                         self.redo_stack.push(inverse_cmd);
                     }
                 }
@@ -1273,7 +1220,6 @@ impl History {
                             old_object: current_object,
                             new_object,
                         };
-                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
                         self.redo_stack.push(inverse_cmd);
                     }
                 }
@@ -1284,8 +1230,60 @@ impl History {
                     let inverse_cmd = HistoryCommand::ClearObjects {
                         objects: old_objects,
                     };
-                    self.memory_usage += Self::estimate_command_size(&inverse_cmd);
                     self.redo_stack.push(inverse_cmd);
+                }
+                HistoryCommand::MoveObject {
+                    index,
+                    old_position,
+                    new_position,
+                } => {
+                    // 撤销移动操作 = 移动回原位置
+                    if index < current_state.objects.len() {
+                        let delta = old_position - new_position; // Calculate the reverse movement
+                        CanvasObject::move_object(&mut current_state.objects[index], delta);
+                        // 将撤销操作的逆操作推送到重做栈
+                        let inverse_cmd = HistoryCommand::MoveObject {
+                            index,
+                            old_position: new_position,
+                            new_position: old_position,
+                        };
+                        self.redo_stack.push(inverse_cmd);
+                    }
+                }
+                HistoryCommand::TransformObject {
+                    index,
+                    old_transform,
+                    new_transform,
+                } => {
+                    // 撤销变换操作 = 恢复原始变换
+                    if index < current_state.objects.len() {
+                        match &mut current_state.objects[index] {
+                            CanvasObject::Image(img) => {
+                                img.pos = old_transform.pos;
+                                img.size = old_transform.size;
+                            }
+                            CanvasObject::Text(text) => {
+                                text.pos = old_transform.pos;
+                                text.font_size = old_transform.size.x; // Using x for font size
+                            }
+                            CanvasObject::Shape(shape) => {
+                                shape.pos = old_transform.pos;
+                                shape.size = old_transform.size.x; // Using x for shape size
+                                shape.rotation = old_transform.rotation;
+                            }
+                            CanvasObject::Stroke(_) => {
+                                // For strokes, we would need to store all points for proper undo
+                                // This is a simplified implementation
+                            }
+                        }
+                        // 将撤销操作的逆操作推送到重做栈
+                        let inverse_cmd = HistoryCommand::TransformObject {
+                            index,
+                            old_transform: new_transform,
+                            new_transform: old_transform,
+                        };
+                        self.redo_stack.push(inverse_cmd);
+                    }
                 }
             }
             true
@@ -1304,7 +1302,6 @@ impl History {
                         current_state.objects.insert(index, object.clone());
                         // 将逆操作推送到撤销栈
                         let inverse_cmd = HistoryCommand::RemoveObject { index, object };
-                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
                         self.undo_stack.push(inverse_cmd);
                     }
                 }
@@ -1314,7 +1311,6 @@ impl History {
                         current_state.objects.remove(index);
                         // 将逆操作推送到撤销栈
                         let inverse_cmd = HistoryCommand::AddObject { index, object };
-                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
                         self.undo_stack.push(inverse_cmd);
                     }
                 }
@@ -1335,7 +1331,6 @@ impl History {
                             old_object: current_object,
                             new_object,
                         };
-                        self.memory_usage += Self::estimate_command_size(&inverse_cmd);
                         self.undo_stack.push(inverse_cmd);
                     }
                 }
@@ -1346,8 +1341,60 @@ impl History {
                     let inverse_cmd = HistoryCommand::ClearObjects {
                         objects: old_objects,
                     };
-                    self.memory_usage += Self::estimate_command_size(&inverse_cmd);
                     self.undo_stack.push(inverse_cmd);
+                }
+                HistoryCommand::MoveObject {
+                    index,
+                    old_position,
+                    new_position,
+                } => {
+                    // 重做移动操作 = 移动到新位置
+                    if index < current_state.objects.len() {
+                        let delta = new_position - old_position; // Calculate the forward movement
+                        CanvasObject::move_object(&mut current_state.objects[index], delta);
+                        // 将逆操作推送到撤销栈
+                        let inverse_cmd = HistoryCommand::MoveObject {
+                            index,
+                            old_position: new_position,
+                            new_position: old_position,
+                        };
+                        self.undo_stack.push(inverse_cmd);
+                    }
+                }
+                HistoryCommand::TransformObject {
+                    index,
+                    old_transform,
+                    new_transform,
+                } => {
+                    // 重做变换操作 = 应用新变换
+                    if index < current_state.objects.len() {
+                        match &mut current_state.objects[index] {
+                            CanvasObject::Image(img) => {
+                                img.pos = new_transform.pos;
+                                img.size = new_transform.size;
+                            }
+                            CanvasObject::Text(text) => {
+                                text.pos = new_transform.pos;
+                                text.font_size = new_transform.size.x; // Using x for font size
+                            }
+                            CanvasObject::Shape(shape) => {
+                                shape.pos = new_transform.pos;
+                                shape.size = new_transform.size.x; // Using x for shape size
+                                shape.rotation = new_transform.rotation;
+                            }
+                            CanvasObject::Stroke(_) => {
+                                // For strokes, we would need to store all points for proper redo
+                                // This is a simplified implementation
+                            }
+                        }
+                        // 将逆操作推送到撤销栈
+                        let inverse_cmd = HistoryCommand::TransformObject {
+                            index,
+                            old_transform: new_transform,
+                            new_transform: old_transform,
+                        };
+                        self.undo_stack.push(inverse_cmd);
+                    }
                 }
             }
             true
@@ -1356,16 +1403,10 @@ impl History {
         }
     }
 
-    // // 获取内存使用量（用于调试）
-    // pub fn memory_usage(&self) -> usize {
-    //     self.memory_usage
-    // }
-
     // // 清空历史记录
     // pub fn clear(&mut self) {
     //     self.undo_stack.clear();
     //     self.redo_stack.clear();
-    //     self.memory_usage = 0;
     // }
 
     // // 检查是否可以撤销
@@ -1377,13 +1418,6 @@ impl History {
     // pub fn can_redo(&self) -> bool {
     //     !self.redo_stack.is_empty()
     // }
-
-    // 兼容性方法：保存完整状态（用于向后兼容）
-    pub fn save_state(&mut self, state: &CanvasState) {
-        // 对于复杂操作，回退到保存完整状态
-        // 这种情况很少发生，主要用于批量操作
-        self.save_clear_objects(state.objects.clone());
-    }
 }
 
 // 应用程序状态

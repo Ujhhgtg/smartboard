@@ -7,12 +7,12 @@ use crate::state::{
 use crate::{UserEvent, utils};
 use core::f32;
 use egui::{Color32, Pos2, Stroke};
-use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::{ScreenDescriptor, wgpu, wgpu::PresentMode};
 use image::GenericImageView;
 use std::sync::Arc;
 use std::time::Instant;
 use tray_icon::TrayIconBuilder;
+use wgpu::CurrentSurfaceTexture;
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -107,11 +107,16 @@ impl App {
         window.set_taskbar_icon(winit_icon);
 
         // 获取显示模式
-        self.state.available_video_modes = window
+        let monitor = window
             .current_monitor()
-            .expect("no monitor found")
-            .video_modes()
-            .collect();
+            .or_else(|| window.primary_monitor());
+
+        self.state.available_video_modes = monitor
+            .map(|m| m.video_modes().collect())
+            .unwrap_or_else(|| {
+                eprintln!("warning: no monitor available yet");
+                Vec::new()
+            });
 
         // 设置窗口模式
         self.apply_window_mode(&window);
@@ -349,31 +354,25 @@ impl App {
 
         let surface_texture = render_state.surface.get_current_texture();
 
-        match surface_texture {
-            Err(SurfaceError::Lost) => {
+        let surface_texture = match surface_texture {
+            CurrentSurfaceTexture::Success(surface) => surface,
+            CurrentSurfaceTexture::Lost => {
                 println!("wgpu surface lost");
                 return;
             }
-            Err(SurfaceError::Outdated) => {
-                // Ignoring outdated to allow resizing and minimization
+            CurrentSurfaceTexture::Outdated => {
                 println!("wgpu surface outdated");
                 return;
             }
-            Err(SurfaceError::Timeout) => {
+            CurrentSurfaceTexture::Timeout => {
                 println!("wgpu surface timeout");
                 return;
             }
-            Err(SurfaceError::OutOfMemory) => {
-                panic!("out of memory");
-            }
-            Err(_) => {
-                surface_texture.expect("Failed to acquire next swap chain texture");
+            val => {
+                println!("{:?}", val);
                 return;
             }
-            Ok(_) => {}
         };
-
-        let surface_texture = surface_texture.unwrap();
 
         let surface_view = surface_texture
             .texture
@@ -424,7 +423,7 @@ impl App {
 
         // 欢迎窗口
         if self.state.show_welcome_window {
-            let content_rect = ctx.available_rect();
+            let content_rect = ctx.content_rect();
             let center_pos = content_rect.center();
 
             // if !self.state.persistent.easter_egg_yuzu_welcome {
@@ -604,7 +603,7 @@ impl App {
 
         // 工具栏窗口
         // if !self.state.show_welcome_window {
-        let content_rect = ctx.available_rect();
+        let content_rect = ctx.content_rect();
         let margin = 20.0; // 底部边距
 
         egui::Window::new("工具栏")
@@ -729,17 +728,21 @@ impl App {
                                     self.state.canvas.objects.get(selected_idx)
                                 {
                                     if ui.button("栅格化").clicked() {
-                                        // 获取文本对象副本以避免借用冲突
                                         if let Some(text_obj) =
                                             self.state.canvas.objects.get(selected_idx).cloned()
                                         {
                                             if let CanvasObject::Text(text) = &text_obj {
-                                                // Save state to history before modification
-                                                self.state.history.save_state(&self.state.canvas);
+                                                // Save the current objects for undo
+                                                let old_objects = self.state.canvas.objects.clone();
 
                                                 // 转换文本为笔画
                                                 let strokes =
                                                     crate::utils::rasterize_text(text, FONT);
+
+                                                // 删除原文本对象
+                                                self.state.canvas.objects.remove(selected_idx);
+
+                                                // Add all new strokes
                                                 for stroke in strokes {
                                                     self.state
                                                         .canvas
@@ -747,11 +750,8 @@ impl App {
                                                         .push(CanvasObject::Stroke(stroke));
                                                 }
 
-                                                // 删除原文本对象
-                                                self.state.canvas.objects.remove(selected_idx);
-                                                self.state
-                                                    .history
-                                                    .save_remove_object(selected_idx, text_obj);
+                                                // Save the operation to history
+                                                self.state.history.save_clear_objects(old_objects);
 
                                                 self.state.selected_object = None;
                                                 self.state.toasts.success("已转换为笔画!");
@@ -874,7 +874,8 @@ impl App {
                         ui.label("清空:");
                         if ui.button("OK").clicked() {
                             // Save state to history before modification
-                            self.state.history.save_state(&self.state.canvas);
+                            let old_objects = self.state.canvas.objects.clone();
+                            self.state.history.save_clear_objects(old_objects);
                             self.state.canvas.objects.clear();
                             self.state.active_strokes.clear();
                             self.state.is_drawing = false;
@@ -933,17 +934,23 @@ impl App {
                                     );
 
                                     // Save state to history before modification
-                                    self.state.history.save_state(&self.state.canvas);
-                                    self.state.canvas.objects.push(CanvasObject::Image(
-                                        CanvasImage {
-                                            texture: texture,
-                                            pos: Pos2::new(100.0, 100.0),
-                                            size: egui::vec2(target_width, target_height),
-                                            aspect_ratio,
-                                            marked_for_deletion: false,
-                                            rot: 0.0,
-                                        },
-                                    ));
+                                    let new_image = CanvasImage {
+                                        texture: texture,
+                                        pos: Pos2::new(100.0, 100.0),
+                                        size: egui::vec2(target_width, target_height),
+                                        aspect_ratio,
+                                        marked_for_deletion: false,
+                                        rot: 0.0,
+                                    };
+                                    let index = self.state.canvas.objects.len();
+                                    self.state.history.save_add_object(
+                                        index,
+                                        CanvasObject::Image(new_image.clone()),
+                                    );
+                                    self.state
+                                        .canvas
+                                        .objects
+                                        .push(CanvasObject::Image(new_image));
 
                                     self.state.current_tool = CanvasTool::Select;
                                 }
@@ -959,7 +966,7 @@ impl App {
 
                     if self.state.show_insert_text_dialog {
                         // 计算屏幕中心位置
-                        let content_rect = ctx.available_rect();
+                        let content_rect = ctx.content_rect();
                         let center_pos = content_rect.center();
 
                         egui::Window::new("插入文本")
@@ -976,16 +983,22 @@ impl App {
                                 ui.horizontal(|ui| {
                                     if ui.button("确认").clicked() {
                                         // Save state to history before modification
-                                        self.state.history.save_state(&self.state.canvas);
-                                        self.state.canvas.objects.push(CanvasObject::Text(
-                                            CanvasText {
-                                                text: self.state.new_text_content.clone(),
-                                                pos: Pos2::new(100.0, 100.0),
-                                                color: Color32::WHITE,
-                                                font_size: 16.0,
-                                                rot: 0.0,
-                                            },
-                                        ));
+                                        let new_text = CanvasText {
+                                            text: self.state.new_text_content.clone(),
+                                            pos: Pos2::new(100.0, 100.0),
+                                            color: Color32::WHITE,
+                                            font_size: 16.0,
+                                            rot: 0.0,
+                                        };
+                                        let index = self.state.canvas.objects.len();
+                                        self.state.history.save_add_object(
+                                            index,
+                                            CanvasObject::Text(new_text.clone()),
+                                        );
+                                        self.state
+                                            .canvas
+                                            .objects
+                                            .push(CanvasObject::Text(new_text));
                                         self.state.current_tool = CanvasTool::Select;
                                         self.state.show_insert_text_dialog = false;
                                         self.state.new_text_content.clear();
@@ -1001,7 +1014,7 @@ impl App {
 
                     if self.state.show_insert_shape_dialog {
                         // 计算屏幕中心位置
-                        let content_rect = ctx.available_rect();
+                        let content_rect = ctx.content_rect();
                         let center_pos = content_rect.center();
 
                         egui::Window::new("插入形状")
@@ -1015,79 +1028,109 @@ impl App {
                                 ui.horizontal(|ui| {
                                     if ui.button("线").clicked() {
                                         // Save state to history before modification
-                                        self.state.history.save_state(&self.state.canvas);
-                                        self.state.canvas.objects.push(CanvasObject::Shape(
-                                            CanvasShape {
-                                                shape_type: CanvasShapeType::Line,
-                                                pos: Pos2::new(100.0, 100.0),
-                                                size: 100.0,
-                                                color: Color32::WHITE,
-                                                rotation: 0.0,
-                                            },
-                                        ));
+                                        let new_shape = CanvasShape {
+                                            shape_type: CanvasShapeType::Line,
+                                            pos: Pos2::new(100.0, 100.0),
+                                            size: 100.0,
+                                            color: Color32::WHITE,
+                                            rotation: 0.0,
+                                        };
+                                        let index = self.state.canvas.objects.len();
+                                        self.state.history.save_add_object(
+                                            index,
+                                            CanvasObject::Shape(new_shape.clone()),
+                                        );
+                                        self.state
+                                            .canvas
+                                            .objects
+                                            .push(CanvasObject::Shape(new_shape));
                                         self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
 
                                     if ui.button("箭头").clicked() {
                                         // Save state to history before modification
-                                        self.state.history.save_state(&self.state.canvas);
-                                        self.state.canvas.objects.push(CanvasObject::Shape(
-                                            CanvasShape {
-                                                shape_type: CanvasShapeType::Arrow,
-                                                pos: Pos2::new(100.0, 100.0),
-                                                size: 100.0,
-                                                color: Color32::WHITE,
-                                                rotation: 0.0,
-                                            },
-                                        ));
+                                        let new_shape = CanvasShape {
+                                            shape_type: CanvasShapeType::Arrow,
+                                            pos: Pos2::new(100.0, 100.0),
+                                            size: 100.0,
+                                            color: Color32::WHITE,
+                                            rotation: 0.0,
+                                        };
+                                        let index = self.state.canvas.objects.len();
+                                        self.state.history.save_add_object(
+                                            index,
+                                            CanvasObject::Shape(new_shape.clone()),
+                                        );
+                                        self.state
+                                            .canvas
+                                            .objects
+                                            .push(CanvasObject::Shape(new_shape));
                                         self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
 
                                     if ui.button("矩形").clicked() {
                                         // Save state to history before modification
-                                        self.state.history.save_state(&self.state.canvas);
-                                        self.state.canvas.objects.push(CanvasObject::Shape(
-                                            CanvasShape {
-                                                shape_type: CanvasShapeType::Rectangle,
-                                                pos: Pos2::new(100.0, 100.0),
-                                                size: 100.0,
-                                                color: Color32::WHITE,
-                                                rotation: 0.0,
-                                            },
-                                        ));
+                                        let new_shape = CanvasShape {
+                                            shape_type: CanvasShapeType::Rectangle,
+                                            pos: Pos2::new(100.0, 100.0),
+                                            size: 100.0,
+                                            color: Color32::WHITE,
+                                            rotation: 0.0,
+                                        };
+                                        let index = self.state.canvas.objects.len();
+                                        self.state.history.save_add_object(
+                                            index,
+                                            CanvasObject::Shape(new_shape.clone()),
+                                        );
+                                        self.state
+                                            .canvas
+                                            .objects
+                                            .push(CanvasObject::Shape(new_shape));
                                         self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
                                     if ui.button("三角形").clicked() {
                                         // Save state to history before modification
-                                        self.state.history.save_state(&self.state.canvas);
-                                        self.state.canvas.objects.push(CanvasObject::Shape(
-                                            CanvasShape {
-                                                shape_type: CanvasShapeType::Triangle,
-                                                pos: Pos2::new(100.0, 100.0),
-                                                size: 100.0,
-                                                color: Color32::WHITE,
-                                                rotation: 0.0,
-                                            },
-                                        ));
+                                        let new_shape = CanvasShape {
+                                            shape_type: CanvasShapeType::Triangle,
+                                            pos: Pos2::new(100.0, 100.0),
+                                            size: 100.0,
+                                            color: Color32::WHITE,
+                                            rotation: 0.0,
+                                        };
+                                        let index = self.state.canvas.objects.len();
+                                        self.state.history.save_add_object(
+                                            index,
+                                            CanvasObject::Shape(new_shape.clone()),
+                                        );
+                                        self.state
+                                            .canvas
+                                            .objects
+                                            .push(CanvasObject::Shape(new_shape));
                                         self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
 
                                     if ui.button("圆形").clicked() {
                                         // Save state to history before modification
-                                        self.state.history.save_state(&self.state.canvas);
-                                        self.state.canvas.objects.push(CanvasObject::Shape(
-                                            CanvasShape {
-                                                shape_type: CanvasShapeType::Circle,
-                                                pos: Pos2::new(100.0, 100.0),
-                                                size: 100.0,
-                                                color: Color32::WHITE,
-                                                rotation: 0.0,
-                                            },
-                                        ));
+                                        let new_shape = CanvasShape {
+                                            shape_type: CanvasShapeType::Circle,
+                                            pos: Pos2::new(100.0, 100.0),
+                                            size: 100.0,
+                                            color: Color32::WHITE,
+                                            rotation: 0.0,
+                                        };
+                                        let index = self.state.canvas.objects.len();
+                                        self.state.history.save_add_object(
+                                            index,
+                                            CanvasObject::Shape(new_shape.clone()),
+                                        );
+                                        self.state
+                                            .canvas
+                                            .objects
+                                            .push(CanvasObject::Shape(new_shape));
                                         self.state.show_insert_shape_dialog =
                                             self.state.persistent.keep_insertion_window_open;
                                     }
@@ -1240,7 +1283,7 @@ impl App {
 
                         // 快捷颜色编辑器窗口
                         if self.state.show_quick_color_editor {
-                            let content_rect = ctx.available_rect();
+                            let content_rect = ctx.content_rect();
                             let center_pos = content_rect.center();
 
                             egui::Window::new("编辑快捷颜色")
@@ -1701,7 +1744,7 @@ impl App {
 
             // 绘制大小预览圆圈
             if self.state.show_size_preview {
-                let content_rect = ui.ctx().available_rect();
+                let content_rect = ui.ctx().content_rect();
                 let pos = content_rect.center();
                 utils::draw_size_preview(
                     painter,
@@ -1812,36 +1855,48 @@ impl App {
                             if let Some(selected_idx) = self.state.selected_object {
                                 if let Some(dragged_handle) = self.state.dragged_handle {
                                     // Resize operation - save state before modification
-                                    let old_object =
-                                        self.state.canvas.objects[selected_idx].clone();
                                     if let Some(object) =
-                                        self.state.canvas.objects.get_mut(selected_idx)
+                                        self.state.canvas.objects.get(selected_idx)
                                     {
-                                        object.transform(
-                                            dragged_handle,
-                                            delta,
-                                            drag_start,
-                                            current_pos,
-                                        );
+                                        let old_transform = object.get_transform();
+                                        if let Some(object) =
+                                            self.state.canvas.objects.get_mut(selected_idx)
+                                        {
+                                            object.transform(
+                                                dragged_handle,
+                                                delta,
+                                                drag_start,
+                                                current_pos,
+                                            );
+                                        }
+                                        // Save the transform operation to history
+                                        if let Some(object) =
+                                            self.state.canvas.objects.get(selected_idx)
+                                        {
+                                            let new_transform = object.get_transform();
+                                            self.state.history.save_transform_object(
+                                                selected_idx,
+                                                old_transform,
+                                                new_transform,
+                                            );
+                                        }
                                     }
-                                    self.state.history.save_modify_object(
-                                        selected_idx,
-                                        old_object,
-                                        self.state.canvas.objects[selected_idx].clone(),
-                                    );
                                 } else {
                                     // Move operation - save state before modification
-                                    let old_object =
-                                        self.state.canvas.objects[selected_idx].clone();
+                                    // For move operations, we need to record the actual positions
+                                    // Since we're moving by delta, we'll record the reverse delta for undo
                                     if let Some(object) =
                                         self.state.canvas.objects.get_mut(selected_idx)
                                     {
                                         CanvasObject::move_object(object, delta);
                                     }
-                                    self.state.history.save_modify_object(
+                                    // Save the move operation to history
+                                    // The old_position is the negative of the delta (to undo the move)
+                                    // The new_position is the delta (to redo the move)
+                                    self.state.history.save_move_object(
                                         selected_idx,
-                                        old_object,
-                                        self.state.canvas.objects[selected_idx].clone(),
+                                        -delta,
+                                        delta,
                                     );
                                 }
                             }
@@ -1913,7 +1968,8 @@ impl App {
 
                             // 如果有对象要删除，保存状态到历史记录
                             if !to_remove.is_empty() {
-                                self.state.history.save_state(&self.state.canvas);
+                                let old_objects = self.state.canvas.objects.clone();
+                                self.state.history.save_clear_objects(old_objects);
                             }
 
                             // 删除对象
@@ -2023,7 +2079,8 @@ impl App {
                                 .count();
                             let new_stroke_count = new_strokes.len();
                             if original_stroke_count != new_stroke_count {
-                                self.state.history.save_state(&self.state.canvas);
+                                let old_objects = self.state.canvas.objects.clone();
+                                self.state.history.save_clear_objects(old_objects);
                             }
 
                             // 替换所有笔画
@@ -2159,16 +2216,22 @@ impl App {
                                         );
 
                                     // Save state to history before modification
-                                    self.state.history.save_state(&self.state.canvas);
-                                    self.state.canvas.objects.push(CanvasObject::Stroke(
-                                        crate::state::CanvasStroke {
-                                            points: interpolated_points,
-                                            widths: interpolated_widths,
-                                            color: self.state.brush_color,
-                                            base_width: self.state.brush_width,
-                                            rot: 0.0,
-                                        },
-                                    ));
+                                    let new_stroke = crate::state::CanvasStroke {
+                                        points: interpolated_points,
+                                        widths: interpolated_widths,
+                                        color: self.state.brush_color,
+                                        base_width: self.state.brush_width,
+                                        rot: 0.0,
+                                    };
+                                    let index = self.state.canvas.objects.len();
+                                    self.state.history.save_add_object(
+                                        index,
+                                        CanvasObject::Stroke(new_stroke.clone()),
+                                    );
+                                    self.state
+                                        .canvas
+                                        .objects
+                                        .push(CanvasObject::Stroke(new_stroke));
                                 }
                             }
 
@@ -2184,16 +2247,22 @@ impl App {
                                 && pos.y <= rect.max.y
                             {
                                 // Save state to history before modification
-                                self.state.history.save_state(&self.state.canvas);
-                                self.state.canvas.objects.push(CanvasObject::Stroke(
-                                    crate::state::CanvasStroke {
-                                        points: vec![pos],
-                                        widths: vec![self.state.brush_width],
-                                        color: self.state.brush_color,
-                                        base_width: self.state.brush_width,
-                                        rot: 0.0,
-                                    },
-                                ));
+                                let new_stroke = crate::state::CanvasStroke {
+                                    points: vec![pos],
+                                    widths: vec![self.state.brush_width],
+                                    color: self.state.brush_color,
+                                    base_width: self.state.brush_width,
+                                    rot: 0.0,
+                                };
+                                let index = self.state.canvas.objects.len();
+                                self.state.history.save_add_object(
+                                    index,
+                                    CanvasObject::Stroke(new_stroke.clone()),
+                                );
+                                self.state
+                                    .canvas
+                                    .objects
+                                    .push(CanvasObject::Stroke(new_stroke));
                             }
                         }
                     }
@@ -2500,15 +2569,22 @@ impl ApplicationHandler<UserEvent> for App {
                                             self.state.persistent.interpolation_frequency,
                                         );
 
-                                    self.state.canvas.objects.push(CanvasObject::Stroke(
-                                        crate::state::CanvasStroke {
-                                            points: interpolated_points,
-                                            widths: interpolated_widths,
-                                            color: self.state.brush_color,
-                                            base_width: self.state.brush_width,
-                                            rot: 0.0,
-                                        },
-                                    ));
+                                    let new_stroke = crate::state::CanvasStroke {
+                                        points: interpolated_points,
+                                        widths: interpolated_widths,
+                                        color: self.state.brush_color,
+                                        base_width: self.state.brush_width,
+                                        rot: 0.0,
+                                    };
+                                    let index = self.state.canvas.objects.len();
+                                    self.state.history.save_add_object(
+                                        index,
+                                        CanvasObject::Stroke(new_stroke.clone()),
+                                    );
+                                    self.state
+                                        .canvas
+                                        .objects
+                                        .push(CanvasObject::Stroke(new_stroke));
                                 }
                             }
 
