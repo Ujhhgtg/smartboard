@@ -35,13 +35,12 @@ egui-notify = "*"
 ttf-parser = "*"
 tray-icon = "*"
 
-# --- security vulnerabilities ---
-glib = { version = "0.22", default-features = false }
-# --- end ---
-
 [build-dependencies]
 shellexpand = "*"
 winres = "*"
+
+[target.'cfg(linux)'.dependencies]
+glib = { version = "0.22", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "*", features = [
