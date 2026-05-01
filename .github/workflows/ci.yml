@@ -40,23 +40,14 @@ jobs:
 
         steps:
             - name: Checkout repository
-              uses: actions/checkout@v6.0.1
+              uses: actions/checkout@v6
 
             - name: Install Rust nightly toolchain
               uses: dtolnay/rust-toolchain@nightly
-              with:
-                  components: rustfmt, clippy
 
-            - name: Install cranelift codegen
-              run: rustup component add rustc-codegen-cranelift-preview --toolchain nightly
-
-            - name: Cache build dir
-              uses: actions/cache@v5
+            - uses: Swatinem/rust-cache@v2
               with:
-                  path: target
-                  key: cargo-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
-                  restore-keys: |
-                      cargo-${{ runner.os }}-${{ matrix.arch }}-
+                  cache-on-failure: true
 
             - name: Install system dependencies (Linux)
               if: matrix.os == 'ubuntu-latest'
