@@ -920,7 +920,7 @@ impl App {
                                     let aspect_ratio = width as f32 / height as f32;
 
                                     // 默认大小
-                                    let target_width = 300.0f32;
+                                    let target_width = 300.0_f32;
                                     let target_height = target_width / aspect_ratio;
 
                                     let ctx = ui.ctx();
@@ -1663,6 +1663,7 @@ impl App {
             });
 
         // 主画布区域
+        #[allow(deprecated)]
         egui::CentralPanel::default().show(ctx, |ui| {
             // egui::Window::new("画布")
             //     .resizable(false)
@@ -1767,7 +1768,7 @@ impl App {
                         15.0,
                         Color32::from_rgba_unmultiplied(255, 255, 255, 180),
                     );
-                    painter.circle_stroke(*pos, 15.0, Stroke::new(2.0, Color32::BLUE));
+                    painter.circle_stroke(*pos, 15.0, Stroke::new(2.0_f32, Color32::BLUE));
 
                     // 绘制触控ID
                     let text_galley = painter.layout_no_wrap(

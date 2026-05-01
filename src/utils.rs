@@ -453,7 +453,7 @@ pub fn get_default_quick_colors() -> Vec<egui::Color32> {
 // 绘制调整句柄
 pub fn draw_resize_handles(painter: &egui::Painter, bbox: egui::Rect) {
     let handle_size = 12.0;
-    let handle_stroke = Stroke::new(1.0, Color32::WHITE);
+    let handle_stroke = Stroke::new(1.0_f32, Color32::WHITE);
     let handle_fill = Color32::BLUE;
 
     // 8个调整大小的句柄
@@ -500,7 +500,7 @@ pub fn draw_resize_handles(painter: &egui::Painter, bbox: egui::Rect) {
     // 绘制旋转指示线
     painter.line_segment(
         [bbox.center_top(), rotate_pos],
-        Stroke::new(1.0, Color32::GRAY),
+        Stroke::new(1.0_f32, Color32::GRAY),
     );
 }
 

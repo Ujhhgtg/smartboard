@@ -167,7 +167,7 @@ impl CanvasObjectOps for CanvasImage {
             painter.rect_stroke(
                 img_rect,
                 0.0,
-                Stroke::new(2.0, Color32::BLUE),
+                Stroke::new(2.0_f32, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
             utils::draw_resize_handles(painter, img_rect);
@@ -255,7 +255,7 @@ impl CanvasObjectOps for CanvasText {
             painter.rect_stroke(
                 text_rect,
                 0.0,
-                Stroke::new(2.0, Color32::BLUE),
+                Stroke::new(2.0_f32, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
             utils::draw_resize_handles(painter, text_rect);
@@ -353,11 +353,11 @@ impl CanvasObjectOps for CanvasShape {
         match self.shape_type {
             CanvasShapeType::Line => {
                 let end_point = Pos2::new(self.pos.x + self.size, self.pos.y);
-                painter.line_segment([self.pos, end_point], Stroke::new(2.0, self.color));
+                painter.line_segment([self.pos, end_point], Stroke::new(2.0_f32, self.color));
             }
             CanvasShapeType::Arrow => {
                 let end_point = Pos2::new(self.pos.x + self.size, self.pos.y);
-                painter.line_segment([self.pos, end_point], Stroke::new(2.0, self.color));
+                painter.line_segment([self.pos, end_point], Stroke::new(2.0_f32, self.color));
 
                 // 绘制箭头头部
                 let arrow_size = self.size * 0.1;
@@ -371,15 +371,15 @@ impl CanvasObjectOps for CanvasShape {
                     end_point.y + arrow_size * arrow_angle.sin(),
                 );
 
-                painter.line_segment([end_point, arrow_point1], Stroke::new(2.0, self.color));
-                painter.line_segment([end_point, arrow_point2], Stroke::new(2.0, self.color));
+                painter.line_segment([end_point, arrow_point1], Stroke::new(2.0_f32, self.color));
+                painter.line_segment([end_point, arrow_point2], Stroke::new(2.0_f32, self.color));
             }
             CanvasShapeType::Rectangle => {
                 let rect = egui::Rect::from_min_size(self.pos, egui::vec2(self.size, self.size));
                 painter.rect_stroke(
                     rect,
                     0.0,
-                    Stroke::new(2.0, self.color),
+                    Stroke::new(2.0_f32, self.color),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -393,11 +393,11 @@ impl CanvasObjectOps for CanvasShape {
                 painter.add(egui::Shape::convex_polygon(
                     points.to_vec(),
                     self.color,
-                    Stroke::new(2.0, self.color),
+                    Stroke::new(2.0_f32, self.color),
                 ));
             }
             CanvasShapeType::Circle => {
-                painter.circle_stroke(self.pos, self.size / 2.0, Stroke::new(2.0, self.color));
+                painter.circle_stroke(self.pos, self.size / 2.0, Stroke::new(2.0_f32, self.color));
             }
         }
 
@@ -407,7 +407,7 @@ impl CanvasObjectOps for CanvasShape {
             painter.rect_stroke(
                 shape_rect,
                 0.0,
-                Stroke::new(2.0, Color32::BLUE),
+                Stroke::new(2.0_f32, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
             utils::draw_resize_handles(painter, shape_rect);
@@ -899,7 +899,7 @@ impl CanvasObjectOps for CanvasStroke {
             painter.rect_stroke(
                 stroke_rect,
                 0.0,
-                Stroke::new(2.0, Color32::BLUE),
+                Stroke::new(2.0_f32, Color32::BLUE),
                 egui::StrokeKind::Outside,
             );
             utils::draw_resize_handles(painter, stroke_rect);
