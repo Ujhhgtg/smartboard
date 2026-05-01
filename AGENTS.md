@@ -15,9 +15,10 @@ cargo build --release  # release
 
 ## Architecture
 
-- GUI app using **egui + wgpu + winit** (not a web app, not a library)
+- GUI app using **egui + wgpu + winit**
 - Entrypoint: `src/main.rs`
-- Core state: `src/state.rs`, rendering: `src/render.rs`, app logic: `src/app.rs`
+- States: `src/state.rs`, rendering: `src/render.rs`, app logic: `src/app.rs`
+- Utilities: `src/utils.rs`
 
 ## Features
 

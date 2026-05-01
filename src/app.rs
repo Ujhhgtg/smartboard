@@ -2086,9 +2086,6 @@ impl App {
 
                 CanvasTool::ObjectEraser => {
                     // 对象橡皮擦：点击或拖拽时删除相交的整个对象
-                    // if egui_wants_pointer {
-                    //     return;
-                    // }
                     if response.drag_started() || response.clicked() || response.dragged() {
                         if let Some(pos) = pointer_pos {
                             // 绘制指针
