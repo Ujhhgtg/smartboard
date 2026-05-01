@@ -27,7 +27,7 @@ pub const STARTUP_AUDIO: &[u8] = include_bytes!("../assets/startup_animation/aud
 
 pub enum PageAction {
     None,
-    Prev,
+    Previous,
     Next,
     New,
     Delete,
@@ -66,7 +66,7 @@ pub fn add_new_page_state(state: &mut AppState) {
 
 pub fn apply_page_action(state: &mut AppState, action: PageAction) {
     match action {
-        PageAction::Prev if state.current_page > 0 => {
+        PageAction::Previous if state.current_page > 0 => {
             switch_to_page_state(state, state.current_page - 1);
         }
         PageAction::Next if state.current_page + 1 < state.pages.len() => {
@@ -100,11 +100,6 @@ pub struct App {
     render_state: Option<RenderState>,
     window: Option<Arc<Window>>,
     state: AppState,
-    // start: Instant,
-
-    // bg_tex: Option<egui::TextureId>,
-    // logo_tex: Option<egui::TextureId>,
-    // button_tex: Option<egui::TextureId>,
 }
 
 impl App {
@@ -126,38 +121,8 @@ impl App {
             render_state: None,
             window: None,
             state,
-            // start: Instant::now(),
-            // bg_tex: None,
-            // logo_tex: None,
-            // button_tex: None,
         }
     }
-
-    // fn load_embedded_texture(ctx: &egui::Context, name: &str, bytes: &[u8]) -> egui::TextureId {
-    //     let image = image::load_from_memory(bytes)
-    //         .expect("invalid image")
-    //         .to_rgba8();
-
-    //     let size = [image.width() as usize, image.height() as usize];
-    //     let pixels = image
-    //         .pixels()
-    //         .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
-    //         .collect();
-
-    //     ctx.load_texture(
-    //         name,
-    //         egui::ColorImage {
-    //             size,
-    //             pixels,
-    //             source_size: Vec2 {
-    //                 x: image.width() as f32,
-    //                 y: image.height() as f32,
-    //             },
-    //         },
-    //         egui::TextureOptions::LINEAR,
-    //     )
-    //     .id()
-    // }
 
     pub async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
@@ -275,124 +240,6 @@ impl App {
         }
     }
 
-    // Convert text to strokes
-    // pub fn rasterize_text_to_strokes(text: &CanvasText) -> Vec<CanvasStroke> {
-    //     let font = fontdue::Font::from_bytes(FONT, fontdue::FontSettings::default()).unwrap();
-
-    //     // let mut strokes = Vec::new();
-
-    //     // let mut cursor_x = 0.0;
-
-    //     // for ch in text.text.chars() {
-    //     //     let (metrics, bitmap) = font.rasterize(ch, text.font_size);
-
-    //     //     let width = metrics.width as usize;
-    //     //     let height = metrics.height as usize;
-
-    //     //     for y in 0..height {
-    //     //         let mut points = Vec::new();
-    //     //         let mut widths = Vec::new();
-
-    //     //         for x in 0..width {
-    //     //             let alpha = bitmap[x + y * width];
-
-    //     //             if alpha > 0 {
-    //     //                 let px = text.pos.x + cursor_x + (x as f32 + metrics.xmin as f32);
-    //     //                 let py = text.pos.y + (y as f32 + metrics.ymin as f32);
-
-    //     //                 points.push(Pos2::new(px, py));
-    //     //                 widths.push(alpha as f32 / 255.0);
-    //     //             } else if !points.is_empty() {
-    //     //                 strokes.push(CanvasStroke {
-    //     //                     points,
-    //     //                     widths,
-    //     //                     color: text.color,
-    //     //                     base_width: text.font_size,
-    //     //                 });
-    //     //                 points = Vec::new();
-    //     //                 widths = Vec::new();
-    //     //             }
-    //     //         }
-
-    //     //         if !points.is_empty() {
-    //     //             strokes.push(CanvasStroke {
-    //     //                 points,
-    //     //                 widths,
-    //     //                 color: text.color,
-    //     //                 base_width: text.font_size,
-    //     //             });
-    //     //         }
-    //     //     }
-
-    //     //     cursor_x += metrics.advance_width;
-    //     // }
-
-    //     // strokes
-
-    //     let mut strokes = Vec::with_capacity(text.text.len() * 4);
-    //     let mut cursor_x = 0.0;
-    //     let inv_255 = 1.0 / 255.0;
-
-    //     let mut points = Vec::with_capacity(32);
-    //     let mut widths = Vec::with_capacity(32);
-
-    //     for ch in text.text.chars() {
-    //         let (metrics, bitmap) = font.rasterize(ch, text.font_size);
-
-    //         if metrics.width == 0 || metrics.height == 0 {
-    //             cursor_x += metrics.advance_width;
-    //             continue;
-    //         }
-
-    //         let width = metrics.width as usize;
-    //         let height = metrics.height as usize;
-
-    //         let base_x = text.pos.x + cursor_x + metrics.xmin as f32;
-    //         let base_y = text.pos.y + metrics.ymin as f32;
-
-    //         for y in 0..height {
-    //             let row_start = y * width;
-    //             let row = &bitmap[row_start..row_start + width];
-
-    //             if row.iter().all(|&a| a == 0) {
-    //                 continue;
-    //             }
-
-    //             points.clear();
-    //             widths.clear();
-
-    //             for (x, &alpha) in row.iter().enumerate() {
-    //                 if alpha > 0 {
-    //                     points.push(Pos2::new(base_x + x as f32, base_y + y as f32));
-    //                     widths.push(alpha as f32 * inv_255);
-    //                 } else if points.len() > 1 {
-    //                     strokes.push(CanvasStroke {
-    //                         points: std::mem::take(&mut points),
-    //                         widths: std::mem::take(&mut widths),
-    //                         color: text.color,
-    //                         base_width: text.font_size,
-    //                     });
-    //                     points.clear();
-    //                     widths.clear();
-    //                 }
-    //             }
-
-    //             if points.len() > 1 {
-    //                 strokes.push(CanvasStroke {
-    //                     points: std::mem::take(&mut points),
-    //                     widths: std::mem::take(&mut widths),
-    //                     color: text.color,
-    //                     base_width: text.font_size,
-    //                 });
-    //             }
-    //         }
-
-    //         cursor_x += metrics.advance_width;
-    //     }
-
-    //     strokes
-    // }
-
     fn handle_resized(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.render_state
@@ -403,15 +250,6 @@ impl App {
     }
 
     fn handle_redraw(&mut self) {
-        // if let Some(window) = self.window.as_ref() {
-        //     if let Some(min) = window.is_minimized() {
-        //         if min {
-        //             println!("Window is minimized");
-        //             return;
-        //         }
-        //     }
-        // }
-
         let render_state = self.render_state.as_mut().unwrap();
 
         let screen_descriptor = ScreenDescriptor {
@@ -490,14 +328,11 @@ impl App {
 
         self.state.toasts.show(ctx);
 
-        // let time = self.start.elapsed().as_secs_f32();
-
         // 欢迎窗口
         if self.state.show_welcome_window {
             let content_rect = ctx.content_rect();
             let center_pos = content_rect.center();
 
-            // if !self.state.persistent.easter_egg_yuzu_welcome {
             egui::Window::new("欢迎")
                 .resizable(false)
                 .collapsible(false)
@@ -556,138 +391,9 @@ impl App {
                         "启动时显示欢迎",
                     );
                 });
-            // } else {
-            //     if self.bg_tex.is_none() {
-            //         self.bg_tex = Some(Self::load_embedded_texture(
-            //             ctx,
-            //             "bg",
-            //             include_bytes!("../assets/images/welcome/bg.png"),
-            //         ));
-
-            //         self.logo_tex = Some(Self::load_embedded_texture(
-            //             ctx,
-            //             "logo",
-            //             include_bytes!("../assets/images/welcome/logo.png"),
-            //         ));
-
-            //         self.button_tex = Some(Self::load_embedded_texture(
-            //             ctx,
-            //             "btn",
-            //             include_bytes!("../assets/images/welcome/new.png"),
-            //         ));
-            //     }
-
-            //     // egui::Window::new("欢迎")
-            //     //     .resizable(false)
-            //     //     .movable(false)
-            //     //     .collapsible(false)
-            //     //     .title_bar(false)
-            //     //     .fixed_rect(content_rect)
-            //     //     .order(egui::Order::Foreground)
-            //     //     .show(ctx, |ui| {
-            //     //         ui.set_min_size(content_rect.size());
-
-            //     let avail = content_rect.size();
-
-            //     // ===== virtual 1920x1080 =====
-            //     let logical_w = 1920.0;
-            //     let logical_h = 1080.0;
-
-            //     let scale = (avail.x / logical_w).min(avail.y / logical_h);
-            //     let draw_w = logical_w * scale;
-            //     let draw_h = logical_h * scale;
-
-            //     let offset_x = (avail.x - draw_w) * 0.5;
-            //     let offset_y = (avail.y - draw_h) * 0.5;
-
-            //     let painter = ctx.layer_painter(egui::LayerId::new(
-            //         egui::Order::Foreground,
-            //         egui::Id::new("yuzu_welcome"),
-            //     ));
-
-            //     // ===========================
-            //     // BACKGROUND (animated)
-            //     // ===========================
-            //     let bg_delay = 0.0;
-            //     let bg_dur = 1.1;
-
-            //     let mut bg_x = -64.0;
-            //     let mut bg_y = -36.0;
-            //     let mut bg_scale = 1.067;
-
-            //     if time > bg_delay {
-            //         let t = ((time - bg_delay) / bg_dur).clamp(0.0, 1.0);
-            //         let e = utils::exp_ease(0.1, t);
-
-            //         bg_x = -64.0 + 64.0 * e;
-            //         bg_y = -36.0 + 36.0 * e;
-            //         bg_scale = 1.067 - 0.067 * e;
-            //     }
-
-            //     let bg_pos = egui::pos2(offset_x + bg_x * scale, offset_y + bg_y * scale);
-            //     let bg_size = egui::vec2(1920.0 * bg_scale * scale, 1080.0 * bg_scale * scale);
-
-            //     painter.image(
-            //         self.bg_tex.unwrap(),
-            //         egui::Rect::from_min_size(bg_pos, bg_size),
-            //         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            //         egui::Color32::WHITE,
-            //     );
-
-            //     // ===========================
-            //     // LOGO (animated)
-            //     // ===========================
-            //     let logo_delay = 0.3;
-            //     let logo_dur = 0.6;
-
-            //     let mut logo_scale = 1.1;
-
-            //     if time > logo_delay {
-            //         let t = ((time - logo_delay) / logo_dur).clamp(0.0, 1.0);
-            //         let e = utils::exp_ease(0.1, t);
-            //         logo_scale = 1.1 - 0.1 * e;
-            //     }
-
-            //     let logo_pos = egui::pos2(offset_x + 40.0 * scale, offset_y + 60.0 * scale);
-            //     let logo_size = egui::vec2(400.0 * logo_scale * scale, 160.0 * logo_scale * scale);
-
-            //     painter.image(
-            //         self.logo_tex.unwrap(),
-            //         egui::Rect::from_min_size(logo_pos, logo_size),
-            //         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            //         egui::Color32::WHITE,
-            //     );
-
-            //     // ===========================
-            //     // BUTTON (Minecraft-style)
-            //     // ===========================
-            //     let btn_x = 60.0;
-            //     let btn_y = 360.0;
-
-            //     let btn_rect = egui::Rect::from_min_size(
-            //         egui::pos2(offset_x + btn_x * scale, offset_y + btn_y * scale),
-            //         egui::vec2(300.0 * scale, 60.0 * scale),
-            //     );
-
-            //     // let response =
-            //     //     ui.interact(btn_rect, ui.id().with("new_game"), egui::Sense::click());
-
-            //     painter.image(
-            //         self.button_tex.unwrap(),
-            //         btn_rect,
-            //         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            //         egui::Color32::WHITE,
-            //     );
-
-            //     // if response.clicked() {
-            //     //     self.state.show_welcome_window = false;
-            //     // }
-            //     // });
-            // }
         }
 
         // 工具栏窗口
-        // if !self.state.show_welcome_window {
         let content_rect = ctx.content_rect();
         let margin = 20.0; // 底部边距
 
@@ -1092,6 +798,23 @@ impl App {
                                     if ui.button("取消").clicked() {
                                         self.state.show_insert_text_dialog = false;
                                         self.state.new_text_content.clear();
+                                    }
+
+                                    #[cfg(target_os = "windows")]
+                                    {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let keyboard_btn =
+                                                    ui.button("弹出软键盘");
+                                                if keyboard_btn.clicked() {
+                                                    let _ = std::process::Command::new(
+                                                        "C:\\Program Files\\Common Files\\Microsoft Shared\\ink\\TabTip.exe",
+                                                    )
+                                                    .spawn();
+                                                }
+                                            },
+                                        );
                                     }
                                 });
                             });
@@ -1746,9 +1469,6 @@ impl App {
                             .as_ref()
                             .expect("no window??")
                             .set_visible(false);
-                        // if let Some(tray) = &self.state.tray {
-                        //     let _ = tray.set_visible(true);
-                        // }
                     }
 
                     if self.state.persistent.show_fps {
@@ -1782,7 +1502,7 @@ impl App {
                     };
                     ui.horizontal(|ui| {
                         if ui.add_enabled(current > 0, btn_style("<")).clicked() {
-                            *action = PageAction::Prev;
+                            *action = PageAction::Previous;
                         }
 
                         ui.add(

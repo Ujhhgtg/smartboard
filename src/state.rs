@@ -1439,22 +1439,6 @@ impl History {
             false
         }
     }
-
-    // // 清空历史记录
-    // pub fn clear(&mut self) {
-    //     self.undo_stack.clear();
-    //     self.redo_stack.clear();
-    // }
-
-    // // 检查是否可以撤销
-    // pub fn can_undo(&self) -> bool {
-    //     !self.undo_stack.is_empty()
-    // }
-
-    // // 检查是否可以重做
-    // pub fn can_redo(&self) -> bool {
-    //     !self.redo_stack.is_empty()
-    // }
 }
 
 // 应用程序状态
