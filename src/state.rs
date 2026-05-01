@@ -889,6 +889,9 @@ impl CanvasObjectOps for CanvasStroke {
             self.points.clone()
         };
 
+        // 如果所有宽度相同，使用简单路径
+        let all_same_width = self.widths.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01);
+
         painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
             rotated_points[0],
             self.widths[0] / 2.0,
@@ -900,12 +903,28 @@ impl CanvasObjectOps for CanvasStroke {
                 self.widths[rotated_points.len() - 1] / 2.0,
                 color,
             )));
-            for i in 0..rotated_points.len() - 1 {
-                let avg_width = (self.widths[i] + self.widths[i + 1]) / 2.0;
+            if all_same_width && rotated_points.len() == 2 {
+                // 只有两个点且宽度相同，直接画线段
                 painter.line_segment(
-                    [rotated_points[i], rotated_points[i + 1]],
-                    Stroke::new(avg_width, color),
+                    [rotated_points[0], rotated_points[1]],
+                    Stroke::new(self.widths[0], color),
                 );
+            } else if all_same_width {
+                // 多个点但宽度相同，使用路径
+                let path = egui::epaint::PathShape::line(
+                    rotated_points,
+                    Stroke::new(self.widths[0], color),
+                );
+                painter.add(egui::Shape::Path(path));
+            } else {
+                // 宽度不同，分段绘制
+                for i in 0..rotated_points.len() - 1 {
+                    let avg_width = (self.widths[i] + self.widths[i + 1]) / 2.0;
+                    painter.line_segment(
+                        [rotated_points[i], rotated_points[i + 1]],
+                        Stroke::new(avg_width, color),
+                    );
+                }
             }
         }
 
