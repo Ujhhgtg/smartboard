@@ -17,8 +17,6 @@ use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
-#[cfg(target_os = "windows")]
-use winit::platform::windows::WindowExtWindows;
 use winit::window::{Fullscreen, Window, WindowId};
 
 // 启动动画
@@ -139,7 +137,10 @@ impl App {
         );
         window.set_window_icon(winit_icon.clone());
         #[cfg(target_os = "windows")]
-        window.set_taskbar_icon(winit_icon);
+        {
+            use winit::platform::windows::WindowExtWindows;
+            window.set_taskbar_icon(winit_icon);
+        }
 
         // 获取显示模式
         let monitor = window
@@ -805,13 +806,12 @@ impl App {
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
-                                                let keyboard_btn =
-                                                    ui.button("弹出软键盘");
+                                                let keyboard_btn = ui.button("屏幕键盘");
                                                 if keyboard_btn.clicked() {
-                                                    let _ = std::process::Command::new(
-                                                        "C:\\Program Files\\Common Files\\Microsoft Shared\\ink\\TabTip.exe",
-                                                    )
-                                                    .spawn();
+                                                    let _ =
+                                                        crate::windows_utils::show_touch_keyboard(
+                                                            None,
+                                                        );
                                                 }
                                             },
                                         );
@@ -1420,11 +1420,6 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label("???:");
                             ui.checkbox(&mut self.state.persistent.easter_egg_redo, "");
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("???:");
-                            ui.checkbox(&mut self.state.persistent.easter_egg_yuzu_welcome, "");
                         });
                     });
                 }

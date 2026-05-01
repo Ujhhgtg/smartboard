@@ -4,6 +4,9 @@ mod app;
 mod render;
 mod state;
 mod utils;
+#[cfg(target_os = "windows")]
+#[allow(non_snake_case)]
+mod windows_utils;
 
 use std::backtrace::Backtrace;
 

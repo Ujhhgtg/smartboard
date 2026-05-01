@@ -2,12 +2,10 @@ use egui::{Color32, Painter, Pos2, Stroke};
 use image::{DynamicImage, GenericImageView};
 use ttf_parser::{Face, OutlineBuilder};
 
+use crate::state::CanvasStroke;
+
 // 检查点是否与笔画相交（用于对象橡皮擦）
-pub fn point_intersects_stroke(
-    pos: Pos2,
-    stroke: &crate::state::CanvasStroke,
-    eraser_size: f32,
-) -> bool {
+pub fn point_intersects_stroke(pos: Pos2, stroke: &CanvasStroke, eraser_size: f32) -> bool {
     let eraser_radius = eraser_size / 2.0;
     for i in 0..stroke.points.len() - 1 {
         let p1 = stroke.points[i];

@@ -664,8 +664,6 @@ pub struct PersistentState {
 
     #[serde(default)]
     pub easter_egg_redo: bool,
-    #[serde(default)]
-    pub easter_egg_yuzu_welcome: bool,
 }
 
 impl Default for PersistentState {
@@ -693,7 +691,6 @@ impl Default for PersistentState {
             show_startup_animation: true,
 
             easter_egg_redo: false,
-            easter_egg_yuzu_welcome: false,
         }
     }
 }
@@ -1472,7 +1469,7 @@ pub struct AppState {
     pub show_touch_points: bool,                  // 是否显示触控点，用于调试
     pub present_mode_changed: bool,               // 垂直同步模式是否已更改
     #[cfg(target_os = "windows")]
-    pub show_console: bool, // 是否显示控制台 (仅 Windows)
+    pub show_console: bool, // 是否显示控制台 [仅 Windows]
     pub startup_animation: Option<StartupAnimation>, // 启动动画
     pub show_welcome_window: bool,
     pub persistent: PersistentState,
