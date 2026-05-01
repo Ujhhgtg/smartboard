@@ -16,19 +16,19 @@ use wgpu::PresentMode;
 
 use crate::utils;
 
-// 动态画笔模式
+/// Dynamic brush width mode for stroke rendering
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DynamicBrushWidthMode {
     #[default]
-    Disabled, // 禁用
-    BrushTip,   // 模拟笔锋
-    SpeedBased, // 基于速度
+    Disabled, // No dynamic width adjustment
+    BrushTip,   // Simulates brush tip pressure for calligraphy effect
+    SpeedBased, // Adjusts width based on drawing speed
 }
 
-// 调整句柄类型
+/// Transform handle types for object manipulation (resize and rotate)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TransformHandle {
-    // 8个调整大小的句柄
+    // 8 resize handles around the bounding box
     TopLeft,
     Top,
     TopRight,
@@ -37,26 +37,29 @@ pub enum TransformHandle {
     BottomLeft,
     Bottom,
     BottomRight,
-    // 旋转句柄
+    // Rotation handle
     Rotate,
 }
 
-// 工具类型
+/// Available tools for canvas interaction
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum CanvasTool {
-    Select, // 选择
+    Select, // Select and manipulate objects
     #[default]
-    Brush, // 画笔
-    ObjectEraser, // 对象橡皮擦
-    PixelEraser, // 像素橡皮擦
-    Insert, // 插入
-    Settings, // 设置
+    Brush, // Draw freehand strokes
+    ObjectEraser, // Delete entire objects
+    PixelEraser, // Erase pixel by pixel
+    Insert, // Insert images, text, or shapes
+    Settings, // Open settings panel
 }
 
-// 可绘制对象的 trait
+/// Trait for objects that can be rendered on the canvas
 pub trait CanvasObjectOps {
+    /// Renders the object using the provided painter
     fn paint(&self, painter: &egui::Painter, selected: bool);
+    /// Returns the axis-aligned bounding rectangle of the object
     fn bounding_box(&self) -> egui::Rect;
+    /// Transforms the object using the specified handle and drag parameters
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -66,18 +69,19 @@ pub trait CanvasObjectOps {
     );
 }
 
-// 插入的图片数据结构
+/// Image object that can be placed on the canvas
 #[derive(Clone)]
 pub struct CanvasImage {
     pub texture: egui::TextureHandle,
     pub pos: Pos2,
     pub size: egui::Vec2,
     pub aspect_ratio: f32,
-    pub marked_for_deletion: bool, // deferred deletion to avoid panic
+    pub marked_for_deletion: bool, // Deferred deletion to avoid borrow checker issues
     pub rot: f32,
 }
 
 impl CanvasObjectOps for CanvasImage {
+    /// Transforms the image based on the dragged handle
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -149,10 +153,12 @@ impl CanvasObjectOps for CanvasImage {
         }
     }
 
+    /// Returns the bounding rectangle of the image
     fn bounding_box(&self) -> egui::Rect {
         egui::Rect::from_min_size(self.pos, self.size)
     }
 
+    /// Renders the image on the canvas, drawing selection UI if selected
     fn paint(&self, painter: &egui::Painter, selected: bool) {
         let img_rect = self.bounding_box();
         painter.image(
@@ -162,7 +168,7 @@ impl CanvasObjectOps for CanvasImage {
             Color32::WHITE,
         );
 
-        // 如果被选中，绘制边框和调整句柄
+        // Draw selection border and resize handles when selected
         if selected {
             painter.rect_stroke(
                 img_rect,
@@ -187,7 +193,7 @@ impl fmt::Debug for CanvasImage {
     }
 }
 
-// 插入的文本数据结构
+/// Text object that can be placed on the canvas
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasText {
     pub text: String,
@@ -198,6 +204,7 @@ pub struct CanvasText {
 }
 
 impl CanvasObjectOps for CanvasText {
+    /// Transforms the text object, scaling font size for resize handles
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -214,24 +221,26 @@ impl CanvasObjectOps for CanvasText {
             | TransformHandle::BottomLeft
             | TransformHandle::Bottom
             | TransformHandle::BottomRight => {
-                // Scale font size
+                // Scale font size based on drag delta
                 let scale_factor = 1.0 + (delta.x + delta.y) / 200.0;
                 self.font_size = (self.font_size * scale_factor).max(6.0);
             }
             TransformHandle::Rotate => {
-                // For now, ignore rotation for text
+                // Rotation not yet implemented for text
             }
         }
     }
 
+    /// Returns an approximate bounding rectangle for the text
     fn bounding_box(&self) -> egui::Rect {
-        // 估算文本尺寸（近似值）
+        // Approximate text dimensions
         let approx_char_width = self.font_size * 0.6;
         let approx_width = self.text.len() as f32 * approx_char_width;
         let approx_height = self.font_size * 1.2;
         egui::Rect::from_min_size(self.pos, egui::vec2(approx_width, approx_height))
     }
 
+    /// Renders the text on the canvas with optional selection UI
     fn paint(&self, painter: &egui::Painter, selected: bool) {
         // Draw text using egui's text rendering
         let text_galley = painter.layout_no_wrap(
@@ -263,7 +272,7 @@ impl CanvasObjectOps for CanvasText {
     }
 }
 
-// 插入的形状数据结构
+/// Available shape types for the canvas
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum CanvasShapeType {
     Line,
@@ -273,6 +282,7 @@ pub enum CanvasShapeType {
     Circle,
 }
 
+/// Shape object that can be placed on the canvas
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasShape {
     pub shape_type: CanvasShapeType,
@@ -283,6 +293,7 @@ pub struct CanvasShape {
 }
 
 impl CanvasObjectOps for CanvasShape {
+    /// Transforms the shape, scaling uniformly for resize handles
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -299,16 +310,17 @@ impl CanvasObjectOps for CanvasShape {
             | TransformHandle::BottomLeft
             | TransformHandle::Bottom
             | TransformHandle::BottomRight => {
-                // For shapes, scale the size uniformly
-                let scale_factor = 1.0 + (delta.x + delta.y) / 200.0; // Simple scaling
+                // Scale the shape size uniformly
+                let scale_factor = 1.0 + (delta.x + delta.y) / 200.0;
                 self.size = (self.size * scale_factor).max(10.0);
             }
             TransformHandle::Rotate => {
-                // For now, ignore rotation for shapes
+                // Rotation not yet implemented for shapes
             }
         }
     }
 
+    /// Returns the bounding rectangle of the shape with padding for handles
     fn bounding_box(&self) -> egui::Rect {
         match self.shape_type {
             CanvasShapeType::Line => {
@@ -348,8 +360,9 @@ impl CanvasObjectOps for CanvasShape {
         }
     }
 
+    /// Renders the shape and optional selection UI
     fn paint(&self, painter: &egui::Painter, selected: bool) {
-        // 绘制形状本身
+        // Draw the shape itself
         match self.shape_type {
             CanvasShapeType::Line => {
                 let end_point = Pos2::new(self.pos.x + self.size, self.pos.y);
@@ -401,7 +414,7 @@ impl CanvasObjectOps for CanvasShape {
             }
         }
 
-        // 如果被选中，绘制边框和调整句柄
+        // Draw selection border and resize handles when selected
         if selected {
             let shape_rect = self.bounding_box();
             painter.rect_stroke(
@@ -415,7 +428,7 @@ impl CanvasObjectOps for CanvasShape {
     }
 }
 
-// 画布对象
+/// Enum representing all possible canvas object types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CanvasObject {
     Stroke(CanvasStroke),
@@ -426,6 +439,7 @@ pub enum CanvasObject {
 }
 
 impl CanvasObject {
+    /// Moves an object by the specified delta vector
     pub fn move_object(object: &mut CanvasObject, delta: egui::Vec2) {
         match object {
             CanvasObject::Image(img) => {
@@ -446,7 +460,7 @@ impl CanvasObject {
         }
     }
 
-    // Helper function to extract transform information
+    /// Extracts transform information (position, size, rotation) from an object
     pub fn get_transform(&self) -> ObjectTransform {
         match self {
             CanvasObject::Image(img) => ObjectTransform {
@@ -474,6 +488,7 @@ impl CanvasObject {
 }
 
 impl CanvasObjectOps for CanvasObject {
+    /// Delegates transform to the inner object type
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -491,6 +506,7 @@ impl CanvasObjectOps for CanvasObject {
         }
     }
 
+    /// Delegates painting to the inner object type
     fn paint(&self, painter: &egui::Painter, selected: bool) {
         match self {
             CanvasObject::Stroke(stroke) => stroke.paint(painter, selected),
@@ -500,6 +516,7 @@ impl CanvasObjectOps for CanvasObject {
         }
     }
 
+    /// Delegates bounding box calculation to the inner object type
     fn bounding_box(&self) -> egui::Rect {
         match self {
             CanvasObject::Stroke(stroke) => stroke.bounding_box(),
@@ -510,7 +527,7 @@ impl CanvasObjectOps for CanvasObject {
     }
 }
 
-// 窗口模式
+/// Window display mode options
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum WindowMode {
     Windowed,
@@ -519,7 +536,7 @@ pub enum WindowMode {
     BorderlessFullscreen,
 }
 
-// 主题模式
+/// UI theme mode options
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeMode {
     System,
@@ -528,6 +545,7 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// GPU optimization policy for performance vs resource usage tradeoff
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum OptimizationPolicy {
     #[default]
@@ -535,20 +553,37 @@ pub enum OptimizationPolicy {
     ResourceUsage,
 }
 
+/// Represents the current state of the canvas including all objects
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CanvasState {
     pub objects: Vec<CanvasObject>,
 }
 
+/// State for a single page including canvas and undo/redo history
+#[derive(Debug, Clone)]
+pub struct PageState {
+    pub canvas: CanvasState,
+    pub history: History,
+}
+
+impl Default for PageState {
+    fn default() -> Self {
+        Self {
+            canvas: CanvasState::default(),
+            history: History::new(50),
+        }
+    }
+}
+
 impl CanvasState {
-    // 加载画布从文件
+    /// Loads canvas state from a JSON file
     pub fn load_from_file(path: &std::path::PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
         let canvas = serde_json::from_str(&content)?;
         Ok(canvas)
     }
 
-    // 保存画布到文件
+    /// Saves canvas state to a JSON file
     pub fn save_to_file(
         &self,
         path: &std::path::PathBuf,
@@ -558,6 +593,7 @@ impl CanvasState {
         Ok(())
     }
 
+    /// Opens a file dialog to load canvas from user-selected file
     pub fn load_from_file_with_dialog() -> Result<Self, Box<dyn std::error::Error>> {
         let path = rfd::FileDialog::new()
             .add_filter("画布文件", &["json"])
@@ -570,6 +606,7 @@ impl CanvasState {
         Ok(canvas)
     }
 
+    /// Opens a file dialog to save canvas to user-selected file
     pub fn save_to_file_with_dialog(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = rfd::FileDialog::new()
             .add_filter("画布文件", &["json"])
@@ -1423,6 +1460,9 @@ impl History {
 // 应用程序状态
 pub struct AppState {
     pub canvas: CanvasState,
+    pub history: History,                                // 历史记录
+    pub pages: Vec<PageState>,                           // 多页支持
+    pub current_page: usize,                             // 当前页码
     pub active_strokes: HashMap<u64, ActiveStroke>, // 多点触控笔画，存储触控 ID 到正在绘制的笔画
     pub is_drawing: bool,                           // 是否正在绘制
     pub brush_color: Color32,                       // 画笔颜色
@@ -1448,19 +1488,21 @@ pub struct AppState {
     pub show_touch_points: bool,                  // 是否显示触控点，用于调试
     pub present_mode_changed: bool,               // 垂直同步模式是否已更改
     #[cfg(target_os = "windows")]
-    pub show_console: bool, // 是否显示控制台 [Windows]
+    pub show_console: bool, // 是否显示控制台 (仅 Windows)
     pub startup_animation: Option<StartupAnimation>, // 启动动画
     pub show_welcome_window: bool,
     pub persistent: PersistentState,
     pub toasts: Toasts,
-    pub history: History, // 历史记录
     pub tray: Option<TrayIcon>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let default_page = PageState::default();
         Self {
-            canvas: CanvasState::default(),
+            canvas: default_page.canvas.clone(),
+            pages: vec![default_page],
+            current_page: 0,
             active_strokes: HashMap::new(),
             is_drawing: false,
             brush_color: Color32::WHITE,

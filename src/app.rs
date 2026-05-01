@@ -1,8 +1,8 @@
 use crate::render::RenderState;
 use crate::state::{
     AppState, CanvasImage, CanvasObject, CanvasObjectOps, CanvasShape, CanvasShapeType,
-    CanvasState, CanvasText, CanvasTool, DynamicBrushWidthMode, FONT, ICON, OptimizationPolicy,
-    PersistentState, StartupAnimation, ThemeMode, WindowMode,
+    CanvasState, CanvasText, CanvasTool, DynamicBrushWidthMode, FONT, History, ICON,
+    OptimizationPolicy, PageState, PersistentState, StartupAnimation, ThemeMode, WindowMode,
 };
 use crate::{UserEvent, utils};
 use core::f32;
@@ -24,6 +24,76 @@ use winit::window::{Fullscreen, Window, WindowId};
 // 启动动画
 include!(concat!(env!("OUT_DIR"), "/startup_frames.rs"));
 pub const STARTUP_AUDIO: &[u8] = include_bytes!("../assets/startup_animation/audio.wav");
+
+pub enum PageAction {
+    None,
+    Prev,
+    Next,
+    New,
+    Delete,
+}
+
+pub fn switch_to_page_state(state: &mut AppState, page_index: usize) {
+    let old = state.current_page;
+    state.pages[old].canvas = state.canvas.clone();
+    state.pages[old].history = state.history.clone();
+    state.current_page = page_index;
+    state.canvas = state.pages[page_index].canvas.clone();
+    state.history = state.pages[page_index].history.clone();
+    state.selected_object = None;
+    state.drag_start_pos = None;
+    state.dragged_handle = None;
+    state.active_strokes.clear();
+    state.is_drawing = false;
+}
+
+pub fn add_new_page_state(state: &mut AppState) {
+    let old = state.current_page;
+    state.pages[old].canvas = state.canvas.clone();
+    state.pages[old].history = state.history.clone();
+    let new_page = PageState::default();
+    state.pages.push(new_page);
+    let new_idx = state.pages.len() - 1;
+    state.canvas = state.pages[new_idx].canvas.clone();
+    state.history = state.pages[new_idx].history.clone();
+    state.current_page = new_idx;
+    state.selected_object = None;
+    state.drag_start_pos = None;
+    state.dragged_handle = None;
+    state.active_strokes.clear();
+    state.is_drawing = false;
+}
+
+pub fn apply_page_action(state: &mut AppState, action: PageAction) {
+    match action {
+        PageAction::Prev if state.current_page > 0 => {
+            switch_to_page_state(state, state.current_page - 1);
+        }
+        PageAction::Next if state.current_page + 1 < state.pages.len() => {
+            switch_to_page_state(state, state.current_page + 1);
+        }
+        PageAction::New => {
+            add_new_page_state(state);
+        }
+        PageAction::Delete if state.pages.len() > 1 => {
+            let i = state.current_page;
+            state.pages[i].canvas = state.canvas.clone();
+            state.pages[i].history = state.history.clone();
+            state.pages.remove(i);
+            if i >= state.pages.len() {
+                state.current_page = state.pages.len() - 1;
+            }
+            state.canvas = state.pages[state.current_page].canvas.clone();
+            state.history = state.pages[state.current_page].history.clone();
+            state.selected_object = None;
+            state.drag_start_pos = None;
+            state.dragged_handle = None;
+            state.active_strokes.clear();
+            state.is_drawing = false;
+        }
+        _ => {}
+    }
+}
 
 pub struct App {
     gpu_instance: wgpu::Instance,
@@ -451,12 +521,26 @@ impl App {
                     ui.separator();
 
                     if ui.button("新建画布").clicked() {
+                        let default_page = PageState::default();
+                        self.state.pages = vec![default_page.clone()];
+                        self.state.current_page = 0;
+                        self.state.canvas = default_page.canvas;
+                        self.state.history = default_page.history;
+                        self.state.selected_object = None;
                         self.state.show_welcome_window = false;
                     }
                     if ui.button("加载画布").clicked() {
                         match CanvasState::load_from_file_with_dialog() {
                             Ok(canvas) => {
-                                self.state.canvas = canvas;
+                                let page = PageState {
+                                    canvas: canvas.clone(),
+                                    history: History::new(50),
+                                };
+                                self.state.pages = vec![page.clone()];
+                                self.state.current_page = 0;
+                                self.state.canvas = page.canvas;
+                                self.state.history = page.history;
+                                self.state.selected_object = None;
                                 self.state.show_welcome_window = false;
                                 self.state.toasts.success("成功加载画布!")
                             }
@@ -1204,7 +1288,15 @@ impl App {
                             if ui.button("加载").clicked() {
                                 match CanvasState::load_from_file_with_dialog() {
                                     Ok(canvas) => {
-                                        self.state.canvas = canvas;
+                                        let page = PageState {
+                                            canvas: canvas.clone(),
+                                            history: History::new(50),
+                                        };
+                                        self.state.pages = vec![page.clone()];
+                                        self.state.current_page = 0;
+                                        self.state.canvas = page.canvas;
+                                        self.state.history = page.history;
+                                        self.state.selected_object = None;
                                         self.state.show_welcome_window = false;
                                         self.state.toasts.success("成功加载画布!");
                                     }
@@ -1662,19 +1754,101 @@ impl App {
                 });
             });
 
+        {
+            let content_rect = ctx.content_rect();
+            let margin = 8.0;
+            let total_pages = self.state.pages.len();
+            let current = self.state.current_page;
+            let enabled = !self.state.show_welcome_window
+                && if let Some(anim) = &self.state.startup_animation {
+                    anim.is_finished()
+                } else {
+                    true
+                };
+
+            if enabled {
+                let mut action = PageAction::None;
+
+                let build_page_nav = |ui: &mut egui::Ui, action: &mut PageAction| {
+                    let btn_style = |text: &str| {
+                        egui::Button::new(egui::RichText::new(text).size(20.0))
+                            .min_size(egui::vec2(36.0, 28.0))
+                    };
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(current > 0, btn_style("<")).clicked() {
+                            *action = PageAction::Prev;
+                        }
+
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{}/{}", current + 1, total_pages))
+                                    .size(20.0),
+                            )
+                            .selectable(false),
+                        );
+
+                        if ui.add_enabled(total_pages > 1, btn_style("X")).clicked() {
+                            *action = PageAction::Delete;
+                        }
+
+                        let is_last = current == total_pages - 1;
+                        if is_last {
+                            if ui.add(btn_style("+")).clicked() {
+                                *action = PageAction::New;
+                            }
+                        } else if ui.add(btn_style(">")).clicked() {
+                            *action = PageAction::Next;
+                        }
+                    });
+                };
+
+                // left-bottom window
+                egui::Window::new("##page_nav_left")
+                    .resizable(false)
+                    .collapsible(false)
+                    .movable(false)
+                    .title_bar(false)
+                    .pivot(egui::Align2::LEFT_BOTTOM)
+                    .current_pos(Pos2::new(
+                        content_rect.min.x + margin,
+                        content_rect.max.y - margin,
+                    ))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        let mut a = PageAction::None;
+                        build_page_nav(ui, &mut a);
+                        if !matches!(a, PageAction::None) {
+                            action = a;
+                        }
+                    });
+
+                // right-bottom window
+                egui::Window::new("##page_nav_right")
+                    .resizable(false)
+                    .collapsible(false)
+                    .movable(false)
+                    .title_bar(false)
+                    .pivot(egui::Align2::RIGHT_BOTTOM)
+                    .current_pos(Pos2::new(
+                        content_rect.max.x - margin,
+                        content_rect.max.y - margin,
+                    ))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        let mut a = PageAction::None;
+                        build_page_nav(ui, &mut a);
+                        if !matches!(a, PageAction::None) {
+                            action = a;
+                        }
+                    });
+
+                apply_page_action(&mut self.state, action);
+            }
+        }
+
         // 主画布区域
-        #[allow(deprecated)]
+        #[allow(deprecated)] // very complicated; since it works, i'm not going to fix it
         egui::CentralPanel::default().show(ctx, |ui| {
-            // egui::Window::new("画布")
-            //     .resizable(false)
-            //     .movable(false)
-            //     .title_bar(false)
-            //     .pivot(egui::Align2::LEFT_TOP)
-            //     .movable(false)
-            //     .fixed_pos(Pos2::new(0.0, 0.0))
-            //     .fixed_rect(content_rect)
-            //     .order(egui::Order::Background)
-            //     .show(ctx, |ui| {
             let (rect, response) = ui.allocate_exact_size(
                 ui.available_size(),
                 if self.state.persistent.low_latency_mode {
@@ -1795,10 +1969,6 @@ impl App {
 
             // 处理鼠标输入
             let pointer_pos = response.interact_pointer_pos();
-
-            // 检查是否有窗口正在捕获输入
-            // let egui_wants_pointer = ctx.wants_pointer_input();
-            // println!("{}, {}", egui_wants_pointer, ctx.is_using_pointer());
 
             match self.state.current_tool {
                 CanvasTool::Insert | CanvasTool::Settings => {}
