@@ -33,31 +33,32 @@ pub enum PageAction {
 
 pub fn switch_to_page_state(state: &mut AppState, page_index: usize) {
     let old = state.current_page;
-    state.pages[old].canvas = state.canvas.clone();
-    state.pages[old].history = state.history.clone();
-    state.current_page = page_index;
-    state.canvas = state.pages[page_index].canvas.clone();
-    state.history = state.pages[page_index].history.clone();
+    if old != page_index {
+        std::mem::swap(&mut state.canvas, &mut state.pages[old].canvas);
+        std::mem::swap(&mut state.history, &mut state.pages[old].history);
+        state.current_page = page_index;
+        std::mem::swap(&mut state.canvas, &mut state.pages[page_index].canvas);
+        std::mem::swap(&mut state.history, &mut state.pages[page_index].history);
+    }
     state.selected_object = None;
     state.drag_start_pos = None;
     state.dragged_handle = None;
+    state.drag_move_accumulated_delta = egui::Vec2::ZERO;
     state.active_strokes.clear();
     state.is_drawing = false;
 }
 
 pub fn add_new_page_state(state: &mut AppState) {
     let old = state.current_page;
-    state.pages[old].canvas = state.canvas.clone();
-    state.pages[old].history = state.history.clone();
-    let new_page = PageState::default();
-    state.pages.push(new_page);
+    state.pages[old].canvas = std::mem::take(&mut state.canvas);
+    state.pages[old].history = std::mem::replace(&mut state.history, History::new(50));
+    state.pages.push(PageState::default());
     let new_idx = state.pages.len() - 1;
-    state.canvas = state.pages[new_idx].canvas.clone();
-    state.history = state.pages[new_idx].history.clone();
     state.current_page = new_idx;
     state.selected_object = None;
     state.drag_start_pos = None;
     state.dragged_handle = None;
+    state.drag_move_accumulated_delta = egui::Vec2::ZERO;
     state.active_strokes.clear();
     state.is_drawing = false;
 }
@@ -75,17 +76,19 @@ pub fn apply_page_action(state: &mut AppState, action: PageAction) {
         }
         PageAction::Delete if state.pages.len() > 1 => {
             let i = state.current_page;
-            state.pages[i].canvas = state.canvas.clone();
-            state.pages[i].history = state.history.clone();
             state.pages.remove(i);
             if i >= state.pages.len() {
                 state.current_page = state.pages.len() - 1;
             }
-            state.canvas = state.pages[state.current_page].canvas.clone();
-            state.history = state.pages[state.current_page].history.clone();
+            state.canvas = std::mem::take(&mut state.pages[state.current_page].canvas);
+            state.history = std::mem::replace(
+                &mut state.pages[state.current_page].history,
+                History::new(50),
+            );
             state.selected_object = None;
             state.drag_start_pos = None;
             state.dragged_handle = None;
+            state.drag_move_accumulated_delta = egui::Vec2::ZERO;
             state.active_strokes.clear();
             state.is_drawing = false;
         }
@@ -221,7 +224,7 @@ impl App {
                 window.set_fullscreen(Some(Fullscreen::Exclusive(
                     self.state
                         .available_video_modes
-                        .get(0)
+                        .first()
                         .expect("no video mode available")
                         .clone(),
                 )));
@@ -524,9 +527,6 @@ impl App {
                                             self.state.canvas.objects.get(selected_idx).cloned()
                                         {
                                             if let CanvasObject::Text(text) = &text_obj {
-                                                // Save the current objects for undo
-                                                let old_objects = self.state.canvas.objects.clone();
-
                                                 // 转换文本为笔画
                                                 let strokes =
                                                     crate::utils::rasterize_text(text, FONT);
@@ -534,16 +534,24 @@ impl App {
                                                 // 删除原文本对象
                                                 self.state.canvas.objects.remove(selected_idx);
 
+                                                // FIXME: this might be inefficient
                                                 // Add all new strokes
                                                 for stroke in strokes {
+                                                    let stroke_obj = CanvasObject::Stroke(stroke);
                                                     self.state
                                                         .canvas
                                                         .objects
-                                                        .push(CanvasObject::Stroke(stroke));
+                                                        .push(stroke_obj.clone());
+
+                                                    self.state.history.save_add_object(
+                                                        self.state.canvas.objects.len() - 1,
+                                                        stroke_obj,
+                                                    );
                                                 }
 
-                                                // Save the operation to history
-                                                self.state.history.save_clear_objects(old_objects);
+                                                self.state
+                                                    .history
+                                                    .save_remove_object(selected_idx, text_obj);
 
                                                 self.state.selected_object = None;
                                                 self.state.toasts.success("已转换为笔画!");
@@ -666,9 +674,8 @@ impl App {
                         ui.label("清空:");
                         if ui.button("OK").clicked() {
                             // Save state to history before modification
-                            let old_objects = self.state.canvas.objects.clone();
+                            let old_objects = std::mem::take(&mut self.state.canvas.objects);
                             self.state.history.save_clear_objects(old_objects);
-                            self.state.canvas.objects.clear();
                             self.state.active_strokes.clear();
                             self.state.is_drawing = false;
                             self.state.selected_object = None;
@@ -727,7 +734,7 @@ impl App {
 
                                     // Save state to history before modification
                                     let new_image = CanvasImage {
-                                        texture: texture,
+                                        texture,
                                         pos: Pos2::new(100.0, 100.0),
                                         size: egui::vec2(target_width, target_height),
                                         aspect_ratio,
@@ -1467,10 +1474,7 @@ impl App {
                     }
 
                     if self.state.persistent.show_fps {
-                        ui.label(format!(
-                            "FPS: {}",
-                            self.state.fps_counter.current_fps.to_string()
-                        ));
+                        ui.label(format!("FPS: {}", self.state.fps_counter.current_fps));
                     }
                 });
             });
@@ -1505,6 +1509,8 @@ impl App {
                                 egui::RichText::new(format!("{}/{}", current + 1, total_pages))
                                     .size(20.0),
                             )
+                            // although most of the labels in this apps should be unselectable, i'm too lazy to do that,
+                            // so i'm only applying that to page indicator which is frequently clicked on
                             .selectable(false),
                         );
 
@@ -1591,14 +1597,9 @@ impl App {
             }
 
             // 绘制当前正在绘制的笔画
-            for (_touch_id, active_stroke) in &self.state.active_strokes {
+            // TODO: unify with CanvasStroke::paint()
+            for active_stroke in self.state.active_strokes.values() {
                 if active_stroke.widths.len() == active_stroke.points.len() {
-                    // 检查是否所有宽度相同
-                    let all_same_width = active_stroke
-                        .widths
-                        .windows(2)
-                        .all(|w| (w[0] - w[1]).abs() < 0.01);
-
                     painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
                         active_stroke.points[0],
                         active_stroke.widths[0] / 2.0,
@@ -1610,29 +1611,13 @@ impl App {
                             active_stroke.widths[active_stroke.points.len() - 1] / 2.0,
                             self.state.brush_color,
                         )));
-                        if all_same_width && active_stroke.points.len() == 2 {
-                            // 只有两个点且宽度相同，直接画线段
+                        for i in 0..active_stroke.points.len() - 1 {
+                            let avg_width =
+                                (active_stroke.widths[i] + active_stroke.widths[i + 1]) / 2.0;
                             painter.line_segment(
-                                [active_stroke.points[0], active_stroke.points[1]],
-                                Stroke::new(active_stroke.widths[0], self.state.brush_color),
+                                [active_stroke.points[i], active_stroke.points[i + 1]],
+                                Stroke::new(avg_width, self.state.brush_color),
                             );
-                        } else if all_same_width {
-                            // 多个点但宽度相同，使用路径
-                            let path = egui::epaint::PathShape::line(
-                                active_stroke.points.clone(),
-                                Stroke::new(active_stroke.widths[0], self.state.brush_color),
-                            );
-                            painter.add(egui::Shape::Path(path));
-                        } else {
-                            // 宽度不同，分段绘制
-                            for i in 0..active_stroke.points.len() - 1 {
-                                let avg_width =
-                                    (active_stroke.widths[i] + active_stroke.widths[i + 1]) / 2.0;
-                                painter.line_segment(
-                                    [active_stroke.points[i], active_stroke.points[i + 1]],
-                                    Stroke::new(avg_width, self.state.brush_color),
-                                );
-                            }
                         }
                     }
                 }
@@ -1665,7 +1650,7 @@ impl App {
                     );
                     painter.circle_stroke(*pos, 15.0, Stroke::new(2.0_f32, Color32::BLUE));
 
-                    // 绘制触控ID
+                    // 绘制触控 ID
                     let text_galley = painter.layout_no_wrap(
                         format!("{}", id),
                         egui::FontId::proportional(14.0),
@@ -1722,6 +1707,7 @@ impl App {
                         if let Some(pos) = pointer_pos {
                             self.state.drag_start_pos = Some(pos);
                             self.state.dragged_handle = None;
+                            self.state.drag_move_accumulated_delta = egui::Vec2::ZERO;
 
                             // Check if we're dragging a resize handle
                             if let Some(selected_idx) = self.state.selected_object {
@@ -1774,22 +1760,13 @@ impl App {
                                         }
                                     }
                                 } else {
-                                    // Move operation - save state before modification
-                                    // For move operations, we need to record the actual positions
-                                    // Since we're moving by delta, we'll record the reverse delta for undo
+                                    // Move operation
                                     if let Some(object) =
                                         self.state.canvas.objects.get_mut(selected_idx)
                                     {
                                         CanvasObject::move_object(object, delta);
                                     }
-                                    // Save the move operation to history
-                                    // The old_position is the negative of the delta (to undo the move)
-                                    // The new_position is the delta (to redo the move)
-                                    self.state.history.save_move_object(
-                                        selected_idx,
-                                        -delta,
-                                        delta,
-                                    );
+                                    self.state.drag_move_accumulated_delta += delta;
                                 }
                             }
 
@@ -1800,6 +1777,15 @@ impl App {
 
                     // Handle drag stop: clear drag state
                     if response.drag_stopped() {
+                        if self.state.drag_move_accumulated_delta != egui::Vec2::ZERO {
+                            if let Some(selected_idx) = self.state.selected_object {
+                                self.state.history.save_move_object(
+                                    selected_idx,
+                                    -self.state.drag_move_accumulated_delta,
+                                    self.state.drag_move_accumulated_delta,
+                                );
+                            }
+                        }
                         self.state.drag_start_pos = None;
                         self.state.dragged_handle = None;
                     }
@@ -1855,15 +1841,10 @@ impl App {
                                 }
                             }
 
-                            // 如果有对象要删除，保存状态到历史记录
-                            if !to_remove.is_empty() {
-                                let old_objects = self.state.canvas.objects.clone();
-                                self.state.history.save_clear_objects(old_objects);
-                            }
-
-                            // 删除对象
+                            // 删除对象，逐个记录到历史
                             for i in to_remove {
-                                self.state.canvas.objects.remove(i);
+                                let object = self.state.canvas.objects.remove(i);
+                                self.state.history.save_remove_object(i, object);
                             }
                         }
                     }
@@ -1871,9 +1852,6 @@ impl App {
 
                 CanvasTool::PixelEraser => {
                     // 像素橡皮擦：从笔画中移除被擦除的段落，并将笔画分割为多个部分
-                    // if egui_wants_pointer {
-                    //     return;
-                    // }
                     if response.dragged() || response.clicked() {
                         if let Some(pos) = pointer_pos {
                             // 绘制指针
@@ -1950,11 +1928,6 @@ impl App {
                                             rot: 0.0,
                                         });
                                     }
-                                } else {
-                                    // 非笔画对象保留原样
-                                    if let CanvasObject::Stroke(stroke) = object {
-                                        new_strokes.push(stroke.clone());
-                                    }
                                 }
                             }
 
@@ -1968,24 +1941,25 @@ impl App {
                                 .count();
                             let new_stroke_count = new_strokes.len();
                             if original_stroke_count != new_stroke_count {
-                                let old_objects = self.state.canvas.objects.clone();
+                                // Clone only non-stroke objects (few) and O(1)-move the full vec into history
+                                let non_strokes: Vec<_> = self
+                                    .state
+                                    .canvas
+                                    .objects
+                                    .iter()
+                                    .filter(|obj| !matches!(obj, CanvasObject::Stroke(_)))
+                                    .cloned()
+                                    .collect();
+                                let old_objects = std::mem::take(&mut self.state.canvas.objects);
                                 self.state.history.save_clear_objects(old_objects);
+                                self.state.canvas.objects = non_strokes;
+                            } else {
+                                // Strip old strokes in-place
+                                self.state
+                                    .canvas
+                                    .objects
+                                    .retain(|obj| !matches!(obj, CanvasObject::Stroke(_)));
                             }
-
-                            // 替换所有笔画
-                            self.state.canvas.objects = self
-                                .state
-                                .canvas
-                                .objects
-                                .iter()
-                                .filter_map(|obj| {
-                                    if let CanvasObject::Stroke(_) = obj {
-                                        None
-                                    } else {
-                                        Some(obj.clone())
-                                    }
-                                })
-                                .collect();
 
                             // 添加处理后的笔画
                             for stroke in new_strokes {
@@ -1997,243 +1971,59 @@ impl App {
 
                 CanvasTool::Brush => {
                     // 画笔工具
-                    // if egui_wants_pointer {
-                    //     return;
-                    // }
                     if response.drag_started() {
-                        // 开始新的笔画
-                        if let Some(pos) = pointer_pos {
-                            if pos.x >= rect.min.x
-                                && pos.x <= rect.max.x
-                                && pos.y >= rect.min.y
-                                && pos.y <= rect.max.y
-                            {
-                                self.state.is_drawing = true;
-                                let start_time = Instant::now();
-                                let width = utils::calculate_dynamic_width(
-                                    self.state.brush_width,
-                                    self.state.dynamic_brush_width_mode,
-                                    0,
-                                    1,
-                                    None,
-                                );
-
-                                // 使用特殊的 touch_id 0 表示鼠标输入
-                                let touch_id = 0;
-                                self.state.active_strokes.insert(
-                                    touch_id,
-                                    crate::state::ActiveStroke {
-                                        points: vec![pos],
-                                        widths: vec![width],
-                                        times: vec![0.0],
-                                        start_time,
-                                        last_movement_time: start_time,
-                                    },
-                                );
-                            }
+                        if let Some(pos) = pointer_pos
+                            && pos.x >= rect.min.x
+                            && pos.x <= rect.max.x
+                            && pos.y >= rect.min.y
+                            && pos.y <= rect.max.y
+                        {
+                            self.state.is_drawing = true;
+                            brush_stroke_start(&mut self.state, 0, pos);
                         }
                     } else if response.dragged() {
-                        // 继续绘制
-                        if self.state.is_drawing {
-                            if let Some(pos) = pointer_pos {
-                                // 使用特殊的 touch_id 0 表示鼠标输入
-                                let touch_id = 0;
-                                if let Some(active_stroke) =
-                                    self.state.active_strokes.get_mut(&touch_id)
-                                {
-                                    let current_time =
-                                        active_stroke.start_time.elapsed().as_secs_f64();
-
-                                    // 只添加与上一个点距离足够远的点，避免点太密集
-                                    if active_stroke.points.is_empty()
-                                        || active_stroke.points.last().unwrap().distance(pos) > 1.0
-                                    {
-                                        // 计算速度（像素/秒）
-                                        let speed = if active_stroke.points.len() > 0
-                                            && active_stroke.times.len() > 0
-                                        {
-                                            let last_time = active_stroke.times.last().unwrap();
-                                            let time_delta =
-                                                ((current_time - last_time) as f32).max(0.001); // 避免除零
-                                            let distance =
-                                                active_stroke.points.last().unwrap().distance(pos);
-                                            Some(distance / time_delta)
-                                        } else {
-                                            None
-                                        };
-
-                                        active_stroke.points.push(pos);
-                                        active_stroke.times.push(current_time);
-
-                                        // 计算动态宽度
-                                        let width = utils::calculate_dynamic_width(
-                                            self.state.brush_width,
-                                            self.state.dynamic_brush_width_mode,
-                                            active_stroke.points.len() - 1,
-                                            active_stroke.points.len(),
-                                            speed,
-                                        );
-                                        active_stroke.widths.push(width);
-
-                                        // 更新最后移动时间
-                                        active_stroke.last_movement_time = Instant::now();
-                                    }
-                                }
-                            }
+                        if self.state.is_drawing
+                            && let Some(pos) = pointer_pos
+                        {
+                            brush_stroke_add_point(&mut self.state, 0, pos, false);
                         }
                     } else if response.drag_stopped() {
-                        // 结束当前笔画
                         if self.state.is_drawing {
-                            // 使用特殊的 touch_id 0 表示鼠标输入
-                            let touch_id = 0;
-                            if let Some(active_stroke) = self.state.active_strokes.remove(&touch_id)
-                            {
-                                if active_stroke.widths.len() == active_stroke.points.len() {
-                                    // 应用笔画平滑
-                                    let final_points = if self.state.persistent.stroke_smoothing {
-                                        utils::apply_stroke_smoothing(&active_stroke.points)
-                                    } else {
-                                        active_stroke.points
-                                    };
-
-                                    // 应用插值
-                                    let (interpolated_points, interpolated_widths) =
-                                        utils::apply_point_interpolation(
-                                            &final_points,
-                                            &active_stroke.widths,
-                                            self.state.persistent.interpolation_frequency,
-                                        );
-
-                                    // Save state to history before modification
-                                    let new_stroke = crate::state::CanvasStroke {
-                                        points: interpolated_points,
-                                        widths: interpolated_widths,
-                                        color: self.state.brush_color,
-                                        base_width: self.state.brush_width,
-                                        rot: 0.0,
-                                    };
-                                    let index = self.state.canvas.objects.len();
-                                    self.state.history.save_add_object(
-                                        index,
-                                        CanvasObject::Stroke(new_stroke.clone()),
-                                    );
-                                    self.state
-                                        .canvas
-                                        .objects
-                                        .push(CanvasObject::Stroke(new_stroke));
-                                }
-                            }
-
-                            // 检查是否还有其他正在绘制的笔画
-                            self.state.is_drawing = !self.state.active_strokes.is_empty();
+                            brush_stroke_end(&mut self.state, 0);
                         }
                     } else if response.clicked() {
                         // 处理单击事件 - 绘制单个点
-                        if let Some(pos) = pointer_pos {
-                            if pos.x >= rect.min.x
-                                && pos.x <= rect.max.x
-                                && pos.y >= rect.min.y
-                                && pos.y <= rect.max.y
-                            {
-                                // Save state to history before modification
-                                let new_stroke = crate::state::CanvasStroke {
-                                    points: vec![pos],
-                                    widths: vec![self.state.brush_width],
-                                    color: self.state.brush_color,
-                                    base_width: self.state.brush_width,
-                                    rot: 0.0,
-                                };
-                                let index = self.state.canvas.objects.len();
-                                self.state.history.save_add_object(
-                                    index,
-                                    CanvasObject::Stroke(new_stroke.clone()),
-                                );
-                                self.state
-                                    .canvas
-                                    .objects
-                                    .push(CanvasObject::Stroke(new_stroke));
-                            }
+                        if let Some(pos) = pointer_pos
+                            && pos.x >= rect.min.x
+                            && pos.x <= rect.max.x
+                            && pos.y >= rect.min.y
+                            && pos.y <= rect.max.y
+                        {
+                            // Save state to history before modification
+                            let new_stroke = crate::state::CanvasStroke {
+                                points: vec![pos],
+                                widths: vec![self.state.brush_width],
+                                color: self.state.brush_color,
+                                base_width: self.state.brush_width,
+                                rot: 0.0,
+                            };
+                            let index = self.state.canvas.objects.len();
+                            self.state
+                                .history
+                                .save_add_object(index, CanvasObject::Stroke(new_stroke.clone()));
+                            self.state
+                                .canvas
+                                .objects
+                                .push(CanvasObject::Stroke(new_stroke));
                         }
                     }
 
                     // 如果鼠标在画布内移动且正在绘制，也添加点（用于平滑绘制）
-                    if response.hovered() && self.state.is_drawing {
-                        if let Some(pos) = pointer_pos {
-                            // 使用特殊的 touch_id 0 表示鼠标输入
-                            let touch_id = 0;
-                            if let Some(active_stroke) =
-                                self.state.active_strokes.get_mut(&touch_id)
-                            {
-                                let current_time = active_stroke.start_time.elapsed().as_secs_f64();
-
-                                if self.state.persistent.stroke_straightening {
-                                    // 检查是否停留超过 0.5 秒
-                                    let time_since_last_movement =
-                                        active_stroke.last_movement_time.elapsed().as_secs_f32();
-                                    if time_since_last_movement > 0.5 {
-                                        // 拉直笔画
-                                        let straightened_points = utils::straighten_stroke(
-                                            &active_stroke.points,
-                                            self.state.persistent.stroke_straightening_tolerance,
-                                        );
-
-                                        // 只有在点数量实际改变时才更新宽度数组
-                                        if straightened_points.len() != active_stroke.points.len() {
-                                            active_stroke.points = straightened_points;
-
-                                            // 更新宽度数组以匹配新的点数量
-                                            if !active_stroke.widths.is_empty() {
-                                                let first_width = active_stroke.widths[0];
-                                                let last_width =
-                                                    *active_stroke.widths.last().unwrap();
-                                                active_stroke.widths =
-                                                    if active_stroke.points.len() == 1 {
-                                                        vec![first_width]
-                                                    } else {
-                                                        vec![first_width, last_width]
-                                                    };
-                                            }
-                                        }
-
-                                        // 更新最后移动时间
-                                        active_stroke.last_movement_time = Instant::now();
-                                    }
-                                }
-
-                                if active_stroke.points.is_empty()
-                                    || active_stroke.points.last().unwrap().distance(pos) > 1.0
-                                {
-                                    // 计算速度
-                                    let speed = if active_stroke.points.len() > 0
-                                        && active_stroke.times.len() > 0
-                                    {
-                                        let last_time = active_stroke.times.last().unwrap();
-                                        let time_delta =
-                                            ((current_time - last_time) as f32).max(0.001);
-                                        let distance =
-                                            active_stroke.points.last().unwrap().distance(pos);
-                                        Some(distance / time_delta)
-                                    } else {
-                                        None
-                                    };
-
-                                    active_stroke.points.push(pos);
-                                    active_stroke.times.push(current_time);
-
-                                    let width = utils::calculate_dynamic_width(
-                                        self.state.brush_width,
-                                        self.state.dynamic_brush_width_mode,
-                                        active_stroke.points.len() - 1,
-                                        active_stroke.points.len(),
-                                        speed,
-                                    );
-                                    active_stroke.widths.push(width);
-
-                                    // 更新最后移动时间
-                                    active_stroke.last_movement_time = Instant::now();
-                                }
-                            }
-                        }
+                    if response.hovered()
+                        && self.state.is_drawing
+                        && let Some(pos) = pointer_pos
+                    {
+                        brush_stroke_add_point(&mut self.state, 0, pos, true);
                     }
                 }
             }
@@ -2266,11 +2056,11 @@ impl App {
         }
 
         // 应用窗口模式更改
-        if self.state.window_mode_changed {
-            if let Some(window) = self.window.as_ref() {
-                self.apply_window_mode(window);
-                self.state.window_mode_changed = false;
-            }
+        if self.state.window_mode_changed
+            && let Some(window) = self.window.as_ref()
+        {
+            self.apply_window_mode(window);
+            self.state.window_mode_changed = false;
         }
 
         // 应用垂直同步模式更改
@@ -2279,6 +2069,120 @@ impl App {
             self.state.present_mode_changed = false;
         }
     }
+}
+
+fn brush_stroke_start(state: &mut AppState, touch_id: u64, pos: Pos2) {
+    let start_time = Instant::now();
+    let width = utils::calculate_dynamic_width(
+        state.brush_width,
+        state.dynamic_brush_width_mode,
+        0,
+        1,
+        None,
+    );
+    state.active_strokes.insert(
+        touch_id,
+        crate::state::ActiveStroke {
+            points: vec![pos],
+            widths: vec![width],
+            times: vec![0.0],
+            start_time,
+            last_movement_time: start_time,
+        },
+    );
+}
+
+fn brush_stroke_add_point(
+    state: &mut AppState,
+    touch_id: u64,
+    pos: Pos2,
+    apply_straightening: bool,
+) {
+    if let Some(active_stroke) = state.active_strokes.get_mut(&touch_id) {
+        let current_time = active_stroke.start_time.elapsed().as_secs_f64();
+
+        if apply_straightening && state.persistent.stroke_straightening {
+            let time_since_last_movement = active_stroke.last_movement_time.elapsed().as_secs_f32();
+            if time_since_last_movement > 0.5 {
+                let straightened_points = utils::straighten_stroke(
+                    &active_stroke.points,
+                    state.persistent.stroke_straightening_tolerance,
+                );
+                if straightened_points.len() != active_stroke.points.len() {
+                    active_stroke.points = straightened_points;
+                    if !active_stroke.widths.is_empty() {
+                        let first_width = active_stroke.widths[0];
+                        let last_width = *active_stroke.widths.last().unwrap();
+                        active_stroke.widths = if active_stroke.points.len() == 1 {
+                            vec![first_width]
+                        } else {
+                            vec![first_width, last_width]
+                        };
+                    }
+                }
+                active_stroke.last_movement_time = Instant::now();
+            }
+        }
+
+        if active_stroke.points.is_empty()
+            || active_stroke.points.last().unwrap().distance(pos) > 1.0
+        {
+            let speed = if !active_stroke.points.is_empty() && !active_stroke.times.is_empty() {
+                let last_time = active_stroke.times.last().unwrap();
+                let time_delta = ((current_time - last_time) as f32).max(0.001);
+                let distance = active_stroke.points.last().unwrap().distance(pos);
+                Some(distance / time_delta)
+            } else {
+                None
+            };
+
+            active_stroke.points.push(pos);
+            active_stroke.times.push(current_time);
+
+            let width = utils::calculate_dynamic_width(
+                state.brush_width,
+                state.dynamic_brush_width_mode,
+                active_stroke.points.len() - 1,
+                active_stroke.points.len(),
+                speed,
+            );
+            active_stroke.widths.push(width);
+
+            active_stroke.last_movement_time = Instant::now();
+        }
+    }
+}
+
+fn brush_stroke_end(state: &mut AppState, touch_id: u64) {
+    if let Some(active_stroke) = state.active_strokes.remove(&touch_id) {
+        if active_stroke.widths.len() == active_stroke.points.len() {
+            let final_points = if state.persistent.stroke_smoothing {
+                utils::apply_stroke_smoothing(&active_stroke.points)
+            } else {
+                active_stroke.points
+            };
+
+            let (interpolated_points, interpolated_widths) = utils::apply_point_interpolation(
+                &final_points,
+                &active_stroke.widths,
+                state.persistent.interpolation_frequency,
+            );
+
+            let new_stroke = crate::state::CanvasStroke {
+                points: interpolated_points,
+                widths: interpolated_widths,
+                color: state.brush_color,
+                base_width: state.brush_width,
+                rot: 0.0,
+            };
+            let index = state.canvas.objects.len();
+            state
+                .history
+                .save_add_object(index, CanvasObject::Stroke(new_stroke.clone()));
+            state.canvas.objects.push(CanvasObject::Stroke(new_stroke));
+        }
+    }
+    state.is_drawing = !state.active_strokes.is_empty();
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -2291,8 +2195,8 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::TrayIconEvent(event) => match event {
-                tray_icon::TrayIconEvent::Click { .. } => {
+            UserEvent::TrayIconEvent(event) => {
+                if let tray_icon::TrayIconEvent::Click { .. } = event {
                     let window = self.window.as_ref().expect("no window??");
                     window.set_visible(true);
                     window.focus_window();
@@ -2300,8 +2204,7 @@ impl ApplicationHandler<UserEvent> for App {
                         let _ = tray.set_visible(false);
                     }
                 }
-                _ => {}
-            },
+            }
         }
     }
 
@@ -2366,25 +2269,7 @@ impl ApplicationHandler<UserEvent> for App {
                         // 如果当前工具是画笔，开始新的笔画
                         if self.state.current_tool == CanvasTool::Brush {
                             self.state.is_drawing = true;
-                            let start_time = Instant::now();
-                            let width = utils::calculate_dynamic_width(
-                                self.state.brush_width,
-                                self.state.dynamic_brush_width_mode,
-                                0,
-                                1,
-                                None,
-                            );
-
-                            self.state.active_strokes.insert(
-                                id,
-                                crate::state::ActiveStroke {
-                                    points: vec![logical_pos],
-                                    widths: vec![width],
-                                    times: vec![0.0],
-                                    start_time,
-                                    last_movement_time: start_time,
-                                },
-                            );
+                            brush_stroke_start(&mut self.state, id, logical_pos);
                         }
                     }
                     TouchPhase::Moved => {
@@ -2392,48 +2277,7 @@ impl ApplicationHandler<UserEvent> for App {
 
                         // 如果当前工具是画笔，继续绘制
                         if self.state.current_tool == CanvasTool::Brush {
-                            if let Some(active_stroke) = self.state.active_strokes.get_mut(&id) {
-                                let current_time = active_stroke.start_time.elapsed().as_secs_f64();
-
-                                // 只添加与上一个点距离足够远的点，避免点太密集
-                                if active_stroke.points.is_empty()
-                                    || active_stroke.points.last().unwrap().distance(logical_pos)
-                                        > 1.0
-                                {
-                                    // 计算速度（像素/秒）
-                                    let speed = if active_stroke.points.len() > 0
-                                        && active_stroke.times.len() > 0
-                                    {
-                                        let last_time = active_stroke.times.last().unwrap();
-                                        let time_delta =
-                                            ((current_time - last_time) as f32).max(0.001); // 避免除零
-                                        let distance = active_stroke
-                                            .points
-                                            .last()
-                                            .unwrap()
-                                            .distance(logical_pos);
-                                        Some(distance / time_delta)
-                                    } else {
-                                        None
-                                    };
-
-                                    active_stroke.points.push(logical_pos);
-                                    active_stroke.times.push(current_time);
-
-                                    // 计算动态宽度
-                                    let width = utils::calculate_dynamic_width(
-                                        self.state.brush_width,
-                                        self.state.dynamic_brush_width_mode,
-                                        active_stroke.points.len() - 1,
-                                        active_stroke.points.len(),
-                                        speed,
-                                    );
-                                    active_stroke.widths.push(width);
-
-                                    // 更新最后移动时间
-                                    active_stroke.last_movement_time = Instant::now();
-                                }
-                            }
+                            brush_stroke_add_point(&mut self.state, id, logical_pos, false);
                         }
                     }
                     TouchPhase::Ended | TouchPhase::Cancelled => {
@@ -2441,44 +2285,7 @@ impl ApplicationHandler<UserEvent> for App {
 
                         // 如果当前工具是画笔，结束笔画
                         if self.state.current_tool == CanvasTool::Brush {
-                            if let Some(active_stroke) = self.state.active_strokes.remove(&id) {
-                                if active_stroke.widths.len() == active_stroke.points.len() {
-                                    // 应用笔画平滑
-                                    let final_points = if self.state.persistent.stroke_smoothing {
-                                        utils::apply_stroke_smoothing(&active_stroke.points)
-                                    } else {
-                                        active_stroke.points
-                                    };
-
-                                    // 应用插值
-                                    let (interpolated_points, interpolated_widths) =
-                                        utils::apply_point_interpolation(
-                                            &final_points,
-                                            &active_stroke.widths,
-                                            self.state.persistent.interpolation_frequency,
-                                        );
-
-                                    let new_stroke = crate::state::CanvasStroke {
-                                        points: interpolated_points,
-                                        widths: interpolated_widths,
-                                        color: self.state.brush_color,
-                                        base_width: self.state.brush_width,
-                                        rot: 0.0,
-                                    };
-                                    let index = self.state.canvas.objects.len();
-                                    self.state.history.save_add_object(
-                                        index,
-                                        CanvasObject::Stroke(new_stroke.clone()),
-                                    );
-                                    self.state
-                                        .canvas
-                                        .objects
-                                        .push(CanvasObject::Stroke(new_stroke));
-                                }
-                            }
-
-                            // 检查是否还有其他正在绘制的笔画
-                            self.state.is_drawing = !self.state.active_strokes.is_empty();
+                            brush_stroke_end(&mut self.state, id);
                         }
                     }
                 }

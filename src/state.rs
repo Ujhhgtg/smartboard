@@ -708,10 +708,10 @@ impl PersistentState {
     // 加载设置从文件
     pub fn load_from_file() -> Self {
         let settings_path = Self::get_settings_path();
-        if let Ok(content) = std::fs::read_to_string(settings_path) {
-            if let Ok(settings) = serde_json::from_str(&content) {
-                return settings;
-            }
+        if let Ok(content) = std::fs::read_to_string(settings_path)
+            && let Ok(settings) = serde_json::from_str(&content)
+        {
+            return settings;
         }
         Self::default()
     }
@@ -889,9 +889,6 @@ impl CanvasObjectOps for CanvasStroke {
             self.points.clone()
         };
 
-        // 如果所有宽度相同，使用简单路径
-        let all_same_width = self.widths.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01);
-
         painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
             rotated_points[0],
             self.widths[0] / 2.0,
@@ -903,28 +900,12 @@ impl CanvasObjectOps for CanvasStroke {
                 self.widths[rotated_points.len() - 1] / 2.0,
                 color,
             )));
-            if all_same_width && rotated_points.len() == 2 {
-                // 只有两个点且宽度相同，直接画线段
+            for i in 0..rotated_points.len() - 1 {
+                let avg_width = (self.widths[i] + self.widths[i + 1]) / 2.0;
                 painter.line_segment(
-                    [rotated_points[0], rotated_points[1]],
-                    Stroke::new(self.widths[0], color),
+                    [rotated_points[i], rotated_points[i + 1]],
+                    Stroke::new(avg_width, color),
                 );
-            } else if all_same_width {
-                // 多个点但宽度相同，使用路径
-                let path = egui::epaint::PathShape::line(
-                    rotated_points,
-                    Stroke::new(self.widths[0], color),
-                );
-                painter.add(egui::Shape::Path(path));
-            } else {
-                // 宽度不同，分段绘制
-                for i in 0..rotated_points.len() - 1 {
-                    let avg_width = (self.widths[i] + self.widths[i + 1]) / 2.0;
-                    painter.line_segment(
-                        [rotated_points[i], rotated_points[i + 1]],
-                        Stroke::new(avg_width, color),
-                    );
-                }
             }
         }
 
@@ -1013,7 +994,7 @@ impl StartupAnimation {
     fn play_audio(audio: &'static [u8]) -> Player {
         let handle = DeviceSinkBuilder::open_default_sink().expect("failed to open stream");
 
-        let player = Player::connect_new(&handle.mixer());
+        let player = Player::connect_new(handle.mixer());
 
         let cursor = Cursor::new(audio);
         let source = Decoder::new(cursor).unwrap();
@@ -1198,7 +1179,7 @@ impl History {
         self.push_command(command);
     }
 
-    // 内部方法：推送命令并维护历史记录大小
+    // 推送命令并维护历史记录大小
     fn push_command(&mut self, command: HistoryCommand) {
         self.undo_stack.push(command);
         self.redo_stack.clear();
@@ -1261,10 +1242,7 @@ impl History {
                 new_transform: _,
             } => {
                 if *index < current_state.objects.len() {
-                    History::apply_transform(
-                        &mut current_state.objects[*index],
-                        old_transform,
-                    );
+                    History::apply_transform(&mut current_state.objects[*index], old_transform);
                 }
             }
         }
@@ -1291,10 +1269,7 @@ impl History {
                 new_position,
             } => {
                 if *index < current_state.objects.len() {
-                    CanvasObject::move_object(
-                        &mut current_state.objects[*index],
-                        *new_position,
-                    );
+                    CanvasObject::move_object(&mut current_state.objects[*index], *new_position);
                 }
             }
             HistoryCommand::TransformObject {
@@ -1303,10 +1278,7 @@ impl History {
                 new_transform,
             } => {
                 if *index < current_state.objects.len() {
-                    History::apply_transform(
-                        &mut current_state.objects[*index],
-                        new_transform,
-                    );
+                    History::apply_transform(&mut current_state.objects[*index], new_transform);
                 }
             }
         }
@@ -1348,6 +1320,7 @@ pub struct AppState {
     pub selected_object: Option<usize>,             // 选中的对象索引
     pub drag_start_pos: Option<Pos2>,               // 拖拽开始位置
     pub dragged_handle: Option<TransformHandle>,    // 正在拖拽的调整句柄
+    pub drag_move_accumulated_delta: egui::Vec2,    // 移动拖拽累计位移
     pub show_size_preview: bool,
     pub show_insert_text_dialog: bool,
     pub new_text_content: String,
@@ -1388,6 +1361,7 @@ impl Default for AppState {
             selected_object: None,
             drag_start_pos: None,
             dragged_handle: None,
+            drag_move_accumulated_delta: egui::Vec2::ZERO,
             show_size_preview: false,
             fps_counter: FpsCounter::new(),
             should_quit: false,

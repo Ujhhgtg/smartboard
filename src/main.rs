@@ -20,7 +20,7 @@ fn main() {
         rfd::MessageDialog::new()
             .set_title("应用崩溃")
             .set_level(rfd::MessageLevel::Error)
-            .set_description(&info.to_string())
+            .set_description(info.to_string())
             .set_buttons(rfd::MessageButtons::Ok)
             .show();
     }));

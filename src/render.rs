@@ -139,7 +139,7 @@ impl EguiRenderer {
             output_color_format,
             RendererOptions {
                 depth_stencil_format: output_depth_format,
-                msaa_samples: msaa_samples,
+                msaa_samples,
                 dithering: true,
                 predictable_texture_filtering: false,
             },

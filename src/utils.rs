@@ -42,7 +42,7 @@ pub fn point_to_line_segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
         return (p.x - a.x).hypot(p.y - a.y);
     }
 
-    let t = ((ap.x * ab.x + ap.y * ab.y) / ab_sq).max(0.0).min(1.0);
+    let t = ((ap.x * ab.x + ap.y * ab.y) / ab_sq).clamp(0.0, 1.0);
     let closest = Pos2::new(a.x + t * ab.x, a.y + t * ab.y);
     (p.x - closest.x).hypot(p.y - closest.y)
 }
@@ -142,40 +142,6 @@ pub fn apply_point_interpolation(
     (interpolated_points, interpolated_widths)
 }
 
-// 笔画平滑算法 - 使用移动平均和曲线拟合来减少抖动
-// pub fn apply_stroke_smoothing(points: &[Pos2]) -> Vec<Pos2> {
-//     if points.len() < 2 {
-//         return points.to_vec();
-//     }
-
-//     // 应用移动平均滤波器减少抖动
-//     let mut smoothed_points = Vec::with_capacity(points.len());
-
-//     // 窗口大小（调整此值以控制平滑强度）
-//     let window_size = 3; // 使用3点移动平均
-
-//     for i in 0..points.len() {
-//         let start_idx = i.saturating_sub(window_size / 2);
-//         let end_idx = (i + window_size / 2).min(points.len() - 1);
-
-//         let mut sum_x = 0.0;
-//         let mut sum_y = 0.0;
-//         let mut count = 0;
-
-//         for j in start_idx..=end_idx {
-//             sum_x += points[j].x;
-//             sum_y += points[j].y;
-//             count += 1;
-//         }
-
-//         let avg_x = sum_x / count as f32;
-//         let avg_y = sum_y / count as f32;
-//         smoothed_points.push(Pos2::new(avg_x, avg_y));
-//     }
-
-//     smoothed_points
-// }
-
 pub fn apply_stroke_smoothing(points: &[Pos2]) -> Vec<Pos2> {
     if points.len() < 3 {
         return points.to_vec();
@@ -244,13 +210,22 @@ pub fn apply_stroke_smoothing(points: &[Pos2]) -> Vec<Pos2> {
     // --------------------------------
     // 3. Light moving-average cleanup
     // --------------------------------
-    let mut final_points = smoothed.clone();
+    let len = smoothed.len();
+    let mut final_points = Vec::with_capacity(len);
+
+    if len > 0 {
+        final_points.push(smoothed[0]);
+    }
 
     for i in 1..smoothed.len() - 1 {
-        final_points[i] = Pos2 {
+        final_points.push(Pos2 {
             x: (smoothed[i - 1].x + smoothed[i].x + smoothed[i + 1].x) / 3.0,
             y: (smoothed[i - 1].y + smoothed[i].y + smoothed[i + 1].y) / 3.0,
-        };
+        });
+    }
+
+    if len > 1 {
+        final_points.push(smoothed[len - 1]);
     }
 
     final_points
@@ -396,7 +371,7 @@ pub fn straighten_stroke(points: &[Pos2], tolerance: f32) -> Vec<Pos2> {
 //     vec![start, end]
 // }
 
-pub fn draw_size_preview(painter: &Painter, pos: Pos2, size: f32) -> () {
+pub fn draw_size_preview(painter: &Painter, pos: Pos2, size: f32) {
     const SIZE_PREVIEW_BORDER_WIDTH: f32 = 2.0;
     let radius = size / SIZE_PREVIEW_BORDER_WIDTH;
     painter.circle_filled(pos, radius, Color32::WHITE);
