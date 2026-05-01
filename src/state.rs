@@ -1014,7 +1014,7 @@ impl StartupAnimation {
     }
 
     fn play_audio(audio: &'static [u8]) -> Player {
-        let handle = DeviceSinkBuilder::open_default_sink().expect("Failed to open stream");
+        let handle = DeviceSinkBuilder::open_default_sink().expect("failed to open stream");
 
         let player = Player::connect_new(&handle.mixer());
 

@@ -14,7 +14,7 @@ fn main() {
     let mut entries: Vec<_> = fs::read_dir(&frames_dir)
         .unwrap_or_else(|e| {
             panic!(
-                "Failed to read frames directory: {}\nPath: {}",
+                "failed to read frames directory: {}\npath: {}",
                 e,
                 frames_dir.display()
             )

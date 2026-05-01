@@ -208,7 +208,7 @@ impl App {
         let surface = self
             .gpu_instance
             .create_surface(window.clone())
-            .expect("Failed to create surface");
+            .expect("failed to create surface");
 
         let state = RenderState::new(
             &self.gpu_instance,
@@ -222,11 +222,12 @@ impl App {
 
         self.window.get_or_insert(window);
         self.render_state.get_or_insert(state);
+        self.apply_present_mode();
     }
 
     fn exit(&mut self, event_loop: &ActiveEventLoop) {
         if let Err(err) = self.state.persistent.save_to_file() {
-            eprintln!("Failed to save settings: {}", err)
+            eprintln!("failed to save settings: {}", err)
         }
         self.state.tray.take(); // closes tray
         event_loop.exit();
@@ -1480,7 +1481,12 @@ impl App {
                                 let mut current_selection =
                                     self.state.selected_video_mode_index.unwrap_or(0);
 
-                                let mode = &self.state.available_video_modes[current_selection];
+                                let mode = &self
+                                    .state
+                                    .available_video_modes
+                                    .get(current_selection)
+                                    .expect("no video mode available");
+
                                 let mode_text = format!(
                                     "{}x{} @ {}Hz",
                                     mode.size().width,

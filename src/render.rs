@@ -38,7 +38,7 @@ impl RenderState {
                 compatible_surface: Some(&surface),
             })
             .await
-            .expect("Failed to find an appropriate adapter");
+            .expect("failed to find an appropriate adapter");
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -53,7 +53,7 @@ impl RenderState {
                 experimental_features: ExperimentalFeatures::default(),
             })
             .await
-            .expect("Failed to create device");
+            .expect("failed to create device");
 
         let swapchain_capabilities = surface.get_capabilities(&adapter);
         let selected_format = wgpu::TextureFormat::Bgra8UnormSrgb;
@@ -61,7 +61,7 @@ impl RenderState {
             .formats
             .iter()
             .find(|d| **d == selected_format)
-            .expect("Failed to select proper surface texture format");
+            .expect("failed to select proper surface texture format");
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
