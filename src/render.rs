@@ -27,6 +27,7 @@ impl RenderState {
         width: u32,
         height: u32,
         optimization_policy: OptimizationPolicy,
+        present_mode: wgpu::PresentMode,
     ) -> Self {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -68,7 +69,7 @@ impl RenderState {
             format: *swapchain_format,
             width,
             height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode,
             desired_maximum_frame_latency: 0,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],

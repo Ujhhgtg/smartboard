@@ -18,7 +18,7 @@ fn main() {
         eprintln!("backtrace:\n{}", Backtrace::force_capture());
 
         rfd::MessageDialog::new()
-            .set_title("Application Panic")
+            .set_title("应用崩溃")
             .set_level(rfd::MessageLevel::Error)
             .set_description(&info.to_string())
             .set_buttons(rfd::MessageButtons::Ok)

@@ -183,12 +183,12 @@ impl App {
             initial_width,
             initial_height,
             self.state.persistent.optimization_policy,
+            self.state.persistent.present_mode,
         )
         .await;
 
         self.window.get_or_insert(window);
         self.render_state.get_or_insert(state);
-        self.apply_present_mode();
     }
 
     fn exit(&mut self, event_loop: &ActiveEventLoop) {
@@ -2308,7 +2308,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         // 检查是否需要退出
         if self.state.should_quit {
-            println!("Quit button was pressed; exiting");
+            println!("quit button was pressed; exiting");
             self.exit(event_loop);
             return;
         }
@@ -2322,7 +2322,7 @@ impl ApplicationHandler<UserEvent> for App {
 
         match event {
             WindowEvent::CloseRequested => {
-                println!("Window close was requested; exiting");
+                println!("window close was requested; exiting");
                 self.exit(event_loop);
             }
             WindowEvent::KeyboardInput {
@@ -2334,7 +2334,7 @@ impl ApplicationHandler<UserEvent> for App {
                     },
                 ..
             } => {
-                println!("Escape key pressed; exiting");
+                println!("escape key pressed; exiting");
                 self.exit(event_loop);
             }
             WindowEvent::RedrawRequested => {

@@ -1107,12 +1107,6 @@ pub enum HistoryCommand {
         index: usize,
         object: CanvasObject,
     },
-    // 修改对象命令（用于对象属性更改）
-    ModifyObject {
-        index: usize,
-        old_object: CanvasObject,
-        new_object: CanvasObject,
-    },
     // 批量操作（用于清空画布等）
     ClearObjects {
         objects: Vec<CanvasObject>,
@@ -1207,119 +1201,19 @@ impl History {
     // 内部方法：推送命令并维护历史记录大小
     fn push_command(&mut self, command: HistoryCommand) {
         self.undo_stack.push(command);
+        self.redo_stack.clear();
 
         // 清理超出限制的历史记录
         if self.undo_stack.len() > self.max_history_size {
             self.undo_stack.remove(0);
         }
-
-        // 清空重做栈，因为有新的操作
-        self.redo_stack.clear();
     }
 
     // 执行撤销操作
     pub fn undo(&mut self, current_state: &mut CanvasState) -> bool {
         if let Some(command) = self.undo_stack.pop() {
-            match command {
-                HistoryCommand::AddObject { index, object } => {
-                    // 撤销添加操作 = 删除对象
-                    if index < current_state.objects.len() {
-                        current_state.objects.remove(index);
-                        // 将撤销操作的逆操作推送到重做栈
-                        let inverse_cmd = HistoryCommand::RemoveObject { index, object };
-                        self.redo_stack.push(inverse_cmd);
-                    }
-                }
-                HistoryCommand::RemoveObject { index, object } => {
-                    // 撤销删除操作 = 添加对象回来
-                    if index <= current_state.objects.len() {
-                        current_state.objects.insert(index, object.clone());
-                        // 将撤销操作的逆操作推送到重做栈
-                        let inverse_cmd = HistoryCommand::AddObject { index, object };
-                        self.redo_stack.push(inverse_cmd);
-                    }
-                }
-                HistoryCommand::ModifyObject {
-                    index,
-                    old_object,
-                    new_object,
-                } => {
-                    // 撤销修改操作 = 恢复旧对象
-                    if index < current_state.objects.len() {
-                        let current_object =
-                            std::mem::replace(&mut current_state.objects[index], old_object);
-                        // 将撤销操作的逆操作推送到重做栈
-                        let inverse_cmd = HistoryCommand::ModifyObject {
-                            index,
-                            old_object: current_object,
-                            new_object,
-                        };
-                        self.redo_stack.push(inverse_cmd);
-                    }
-                }
-                HistoryCommand::ClearObjects { objects } => {
-                    // 撤销清空操作 = 恢复所有对象
-                    let old_objects = std::mem::replace(&mut current_state.objects, objects);
-                    // 将撤销操作的逆操作推送到重做栈
-                    let inverse_cmd = HistoryCommand::ClearObjects {
-                        objects: old_objects,
-                    };
-                    self.redo_stack.push(inverse_cmd);
-                }
-                HistoryCommand::MoveObject {
-                    index,
-                    old_position,
-                    new_position,
-                } => {
-                    // 撤销移动操作 = 移动回原位置
-                    if index < current_state.objects.len() {
-                        let delta = old_position - new_position; // Calculate the reverse movement
-                        CanvasObject::move_object(&mut current_state.objects[index], delta);
-                        // 将撤销操作的逆操作推送到重做栈
-                        let inverse_cmd = HistoryCommand::MoveObject {
-                            index,
-                            old_position: new_position,
-                            new_position: old_position,
-                        };
-                        self.redo_stack.push(inverse_cmd);
-                    }
-                }
-                HistoryCommand::TransformObject {
-                    index,
-                    old_transform,
-                    new_transform,
-                } => {
-                    // 撤销变换操作 = 恢复原始变换
-                    if index < current_state.objects.len() {
-                        match &mut current_state.objects[index] {
-                            CanvasObject::Image(img) => {
-                                img.pos = old_transform.pos;
-                                img.size = old_transform.size;
-                            }
-                            CanvasObject::Text(text) => {
-                                text.pos = old_transform.pos;
-                                text.font_size = old_transform.size.x; // Using x for font size
-                            }
-                            CanvasObject::Shape(shape) => {
-                                shape.pos = old_transform.pos;
-                                shape.size = old_transform.size.x; // Using x for shape size
-                                shape.rotation = old_transform.rotation;
-                            }
-                            CanvasObject::Stroke(_) => {
-                                // For strokes, we would need to store all points for proper undo
-                                // This is a simplified implementation
-                            }
-                        }
-                        // 将撤销操作的逆操作推送到重做栈
-                        let inverse_cmd = HistoryCommand::TransformObject {
-                            index,
-                            old_transform: new_transform,
-                            new_transform: old_transform,
-                        };
-                        self.redo_stack.push(inverse_cmd);
-                    }
-                }
-            }
+            self.apply_reverse(&command, current_state);
+            self.redo_stack.push(command);
             true
         } else {
             false
@@ -1329,120 +1223,120 @@ impl History {
     // 执行重做操作
     pub fn redo(&mut self, current_state: &mut CanvasState) -> bool {
         if let Some(command) = self.redo_stack.pop() {
-            match command {
-                HistoryCommand::AddObject { index, object } => {
-                    // 重做添加操作 = 添加对象
-                    if index <= current_state.objects.len() {
-                        current_state.objects.insert(index, object.clone());
-                        // 将逆操作推送到撤销栈
-                        let inverse_cmd = HistoryCommand::RemoveObject { index, object };
-                        self.undo_stack.push(inverse_cmd);
-                    }
-                }
-                HistoryCommand::RemoveObject { index, object } => {
-                    // 重做删除操作 = 删除对象
-                    if index < current_state.objects.len() {
-                        current_state.objects.remove(index);
-                        // 将逆操作推送到撤销栈
-                        let inverse_cmd = HistoryCommand::AddObject { index, object };
-                        self.undo_stack.push(inverse_cmd);
-                    }
-                }
-                HistoryCommand::ModifyObject {
-                    index,
-                    old_object: _,
-                    new_object,
-                } => {
-                    // 重做修改操作 = 应用新对象
-                    if index < current_state.objects.len() {
-                        let current_object = std::mem::replace(
-                            &mut current_state.objects[index],
-                            new_object.clone(),
-                        );
-                        // 将逆操作推送到撤销栈
-                        let inverse_cmd = HistoryCommand::ModifyObject {
-                            index,
-                            old_object: current_object,
-                            new_object,
-                        };
-                        self.undo_stack.push(inverse_cmd);
-                    }
-                }
-                HistoryCommand::ClearObjects { objects } => {
-                    // 重做清空操作 = 恢复保存的对象
-                    let old_objects = std::mem::replace(&mut current_state.objects, objects);
-                    // 将逆操作推送到撤销栈
-                    let inverse_cmd = HistoryCommand::ClearObjects {
-                        objects: old_objects,
-                    };
-                    self.undo_stack.push(inverse_cmd);
-                }
-                HistoryCommand::MoveObject {
-                    index,
-                    old_position,
-                    new_position,
-                } => {
-                    // 重做移动操作 = 移动到新位置
-                    if index < current_state.objects.len() {
-                        let delta = new_position - old_position; // Calculate the forward movement
-                        CanvasObject::move_object(&mut current_state.objects[index], delta);
-                        // 将逆操作推送到撤销栈
-                        let inverse_cmd = HistoryCommand::MoveObject {
-                            index,
-                            old_position: new_position,
-                            new_position: old_position,
-                        };
-                        self.undo_stack.push(inverse_cmd);
-                    }
-                }
-                HistoryCommand::TransformObject {
-                    index,
-                    old_transform,
-                    new_transform,
-                } => {
-                    // 重做变换操作 = 应用新变换
-                    if index < current_state.objects.len() {
-                        match &mut current_state.objects[index] {
-                            CanvasObject::Image(img) => {
-                                img.pos = new_transform.pos;
-                                img.size = new_transform.size;
-                            }
-                            CanvasObject::Text(text) => {
-                                text.pos = new_transform.pos;
-                                text.font_size = new_transform.size.x; // Using x for font size
-                            }
-                            CanvasObject::Shape(shape) => {
-                                shape.pos = new_transform.pos;
-                                shape.size = new_transform.size.x; // Using x for shape size
-                                shape.rotation = new_transform.rotation;
-                            }
-                            CanvasObject::Stroke(_) => {
-                                // For strokes, we would need to store all points for proper redo
-                                // This is a simplified implementation
-                            }
-                        }
-                        // 将逆操作推送到撤销栈
-                        let inverse_cmd = HistoryCommand::TransformObject {
-                            index,
-                            old_transform: new_transform,
-                            new_transform: old_transform,
-                        };
-                        self.undo_stack.push(inverse_cmd);
-                    }
-                }
-            }
+            self.apply_forward(&command, current_state);
+            self.undo_stack.push(command);
             true
         } else {
             false
+        }
+    }
+
+    fn apply_reverse(&self, command: &HistoryCommand, current_state: &mut CanvasState) {
+        match command {
+            HistoryCommand::AddObject { index, object: _ } => {
+                if *index < current_state.objects.len() {
+                    current_state.objects.remove(*index);
+                }
+            }
+            HistoryCommand::RemoveObject { index, object } => {
+                if *index <= current_state.objects.len() {
+                    current_state.objects.insert(*index, object.clone());
+                }
+            }
+            HistoryCommand::ClearObjects { objects } => {
+                current_state.objects = objects.clone();
+            }
+            HistoryCommand::MoveObject {
+                index,
+                old_position,
+                new_position: _,
+            } => {
+                if *index < current_state.objects.len() {
+                    CanvasObject::move_object(&mut current_state.objects[*index], *old_position);
+                }
+            }
+            HistoryCommand::TransformObject {
+                index,
+                old_transform,
+                new_transform: _,
+            } => {
+                if *index < current_state.objects.len() {
+                    History::apply_transform(
+                        &mut current_state.objects[*index],
+                        old_transform,
+                    );
+                }
+            }
+        }
+    }
+
+    fn apply_forward(&self, command: &HistoryCommand, current_state: &mut CanvasState) {
+        match command {
+            HistoryCommand::AddObject { index, object } => {
+                if *index <= current_state.objects.len() {
+                    current_state.objects.insert(*index, object.clone());
+                }
+            }
+            HistoryCommand::RemoveObject { index, object: _ } => {
+                if *index < current_state.objects.len() {
+                    current_state.objects.remove(*index);
+                }
+            }
+            HistoryCommand::ClearObjects { objects: _ } => {
+                current_state.objects.clear();
+            }
+            HistoryCommand::MoveObject {
+                index,
+                old_position: _,
+                new_position,
+            } => {
+                if *index < current_state.objects.len() {
+                    CanvasObject::move_object(
+                        &mut current_state.objects[*index],
+                        *new_position,
+                    );
+                }
+            }
+            HistoryCommand::TransformObject {
+                index,
+                old_transform: _,
+                new_transform,
+            } => {
+                if *index < current_state.objects.len() {
+                    History::apply_transform(
+                        &mut current_state.objects[*index],
+                        new_transform,
+                    );
+                }
+            }
+        }
+    }
+
+    fn apply_transform(object: &mut CanvasObject, transform: &ObjectTransform) {
+        match object {
+            CanvasObject::Image(img) => {
+                img.pos = transform.pos;
+                img.size = transform.size;
+            }
+            CanvasObject::Text(text) => {
+                text.pos = transform.pos;
+                text.font_size = transform.size.x;
+            }
+            CanvasObject::Shape(shape) => {
+                shape.pos = transform.pos;
+                shape.size = transform.size.x;
+                shape.rotation = transform.rotation;
+            }
+            CanvasObject::Stroke(_) => {}
         }
     }
 }
 
 // 应用程序状态
 pub struct AppState {
-    pub canvas: CanvasState,
-    pub history: History,                                // 历史记录
-    pub pages: Vec<PageState>,                           // 多页支持
+    pub canvas: CanvasState,                             // 当前页面的画布
+    pub history: History,                                // 当前页面的历史记录
+    pub pages: Vec<PageState>,                           // 分页
     pub current_page: usize,                             // 当前页码
     pub active_strokes: HashMap<u64, ActiveStroke>, // 多点触控笔画，存储触控 ID 到正在绘制的笔画
     pub is_drawing: bool,                           // 是否正在绘制
@@ -1454,14 +1348,14 @@ pub struct AppState {
     pub selected_object: Option<usize>,             // 选中的对象索引
     pub drag_start_pos: Option<Pos2>,               // 拖拽开始位置
     pub dragged_handle: Option<TransformHandle>,    // 正在拖拽的调整句柄
-    pub show_size_preview: bool,                    //
-    pub show_insert_text_dialog: bool,              //
-    pub new_text_content: String,                   //
-    pub show_insert_shape_dialog: bool,             //
-    pub fps_counter: FpsCounter,                    // FPS 计数器
-    pub should_quit: bool,                          //
-    pub touch_points: HashMap<u64, Pos2>,           // 多点触控点，存储触控 ID 到位置的映射
-    pub window_mode_changed: bool,                  // 窗口模式是否已更改
+    pub show_size_preview: bool,
+    pub show_insert_text_dialog: bool,
+    pub new_text_content: String,
+    pub show_insert_shape_dialog: bool,
+    pub fps_counter: FpsCounter, // FPS 计数器
+    pub should_quit: bool,
+    pub touch_points: HashMap<u64, Pos2>, // 多点触控点，存储触控 ID 到位置的映射
+    pub window_mode_changed: bool,        // 窗口模式是否已更改
     pub available_video_modes: Vec<winit::monitor::VideoModeHandle>,
     pub selected_video_mode_index: Option<usize>, // 选中的视频模式索引
     pub show_quick_color_editor: bool,            // 是否显示快捷颜色编辑器
