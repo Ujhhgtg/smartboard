@@ -1,19 +1,20 @@
 #![windows_subsystem = "windows"] // hide console window on Windows in release
 
 mod app;
+mod assets;
 mod render;
 mod state;
+mod ui;
 mod utils;
-
-#[cfg(target_os = "windows")]
-#[allow(non_snake_case)]
-mod windows_utils;
 
 use std::backtrace::Backtrace;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    utils::linux::silence_glib_logs();
+
     std::panic::set_hook(Box::new(|info| {
         eprintln!("panic: {info}");
         eprintln!("backtrace:\n{}", Backtrace::force_capture());
@@ -53,8 +54,6 @@ async fn run() {
     tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
         let _ = proxy.send_event(UserEvent::TrayIconEvent(event));
     }));
-    // event_loop.set_control_flow(ControlFlow::Poll);
-    // Update UI reactively
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = app::App::new();
     event_loop.run_app(&mut app).expect("failed to run app");

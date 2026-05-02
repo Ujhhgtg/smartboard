@@ -1,6 +1,6 @@
 # AGENTS.md — smartboard
 
-A digital whiteboard app.
+A performant digital whiteboard app.
 
 ## Toolchain
 
@@ -23,8 +23,10 @@ cargo clippy --release
 
 - GUI app using **egui + wgpu + winit**
 - Entrypoint: `src/main.rs`
-- States: `src/state.rs`, rendering: `src/render.rs`, app logic: `src/app.rs`
-- Utilities: `src/utils.rs`
+- States: `src/state/mod.rs`, rendering: `src/render.rs`, app logic: `src/app.rs`
+- rkyv serialization states: `src/state/flat.rs`
+- Utilities: `src/utils/*`
+- UI components: `src/ui.rs`
 
 ## Features
 

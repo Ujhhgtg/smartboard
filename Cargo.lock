@@ -2952,7 +2952,7 @@ dependencies = [
 
 [[package]]
 name = "smartboard"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "dirs",
  "egui",
@@ -2975,6 +2975,7 @@ dependencies = [
  "windows",
  "windows-core",
  "winit",
+ "winreg",
  "winres",
 ]
 
@@ -4188,6 +4189,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ee1708bef14716a11bae175f579062d4554d95be2c6829f518df847b7b3fdd0"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 [package]
 name = "smartboard"
 description = "A powerful digital whiteboard built with Rust, winit, egui, and wgpu."
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 edition = "2024"
 repository = "https://github.com/Ujhhgtg/smartboard/"
 license-file = "LICENSE"
@@ -61,16 +61,17 @@ fontdb = { version = "*", optional = true }
 shellexpand = "*"
 winres = "*"
 
-[target.'cfg(linux)'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 glib = { version = "0.22", default-features = false }
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "*", features = [
     "Win32_System_Console",
     "Win32_System_Com",
     "Win32_Foundation",
 ] }
 windows-core = { version = "*", default-features = false }
+winreg = "*"
 
 [profile.release]
 opt-level = 3

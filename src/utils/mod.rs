@@ -1,13 +1,21 @@
+pub mod dark_mode;
+pub mod stroke;
+pub mod ui;
+
+#[cfg(target_os = "windows")]
+#[allow(non_snake_case)]
+pub mod windows;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 use std::sync::OnceLock;
 
-use egui::{Color32, Painter, Pos2, Stroke};
+use egui::{Color32, Painter, Pos2, Rect, Stroke};
 use image::{DynamicImage, GenericImageView};
 use ttf_parser::{Face, OutlineBuilder};
 
-use crate::state::CanvasStroke;
-use crate::state::DynamicBrushWidthMode;
-use crate::state::StrokeWidth;
-use crate::state::TransformHandle;
+use crate::state::{CanvasStroke, DynamicBrushWidthMode, StrokeWidth, TransformHandle};
 
 // 检查点是否与笔画相交（用于对象橡皮擦）
 pub fn point_intersects_stroke(pos: Pos2, stroke: &CanvasStroke, eraser_size: f32) -> bool {
@@ -431,7 +439,7 @@ pub fn resize_image_for_texture(image: DynamicImage, max_texture_size: u32) -> D
     )
 }
 
-pub fn get_default_quick_colors() -> Vec<egui::Color32> {
+pub fn get_default_quick_colors() -> Vec<Color32> {
     vec![
         Color32::from_rgb(0, 0, 0),       // 黑色 - Primary text and outlines
         Color32::from_rgb(255, 255, 255), // 白色 - Highlighting and backgrounds
@@ -442,8 +450,12 @@ pub fn get_default_quick_colors() -> Vec<egui::Color32> {
     ]
 }
 
+pub fn get_default_canvas_color() -> Color32 {
+    Color32::from_rgb(15, 38, 30)
+}
+
 // 绘制调整句柄
-pub fn draw_resize_handles(painter: &egui::Painter, bbox: egui::Rect) {
+pub fn draw_resize_handles(painter: &egui::Painter, bbox: Rect) {
     let handle_size = 12.0;
     let handle_stroke = Stroke::new(1.0_f32, Color32::WHITE);
     let handle_fill = Color32::BLUE;
@@ -470,7 +482,7 @@ pub fn draw_resize_handles(painter: &egui::Painter, bbox: egui::Rect) {
     ];
 
     for (pos, _) in &handles {
-        let handle_rect = egui::Rect::from_center_size(*pos, egui::vec2(handle_size, handle_size));
+        let handle_rect = Rect::from_center_size(*pos, egui::vec2(handle_size, handle_size));
         painter.rect_filled(handle_rect, 0.0, handle_fill);
         painter.rect_stroke(handle_rect, 0.0, handle_stroke, egui::StrokeKind::Outside);
     }
@@ -488,7 +500,7 @@ pub fn draw_resize_handles(painter: &egui::Painter, bbox: egui::Rect) {
 }
 
 // 获取鼠标位置下的调整句柄
-pub fn get_transform_handle_at_pos(bbox: egui::Rect, pos: Pos2) -> Option<TransformHandle> {
+pub fn get_transform_handle_at_pos(bbox: Rect, pos: Pos2) -> Option<TransformHandle> {
     let handle_size = 20.0;
     let handle_hit_size = handle_size * 1.5; // 扩大点击区域
 
@@ -515,7 +527,7 @@ pub fn get_transform_handle_at_pos(bbox: egui::Rect, pos: Pos2) -> Option<Transf
 
     for (handle_pos, handle_type) in &handles {
         let handle_rect =
-            egui::Rect::from_center_size(*handle_pos, egui::vec2(handle_hit_size, handle_hit_size));
+            Rect::from_center_size(*handle_pos, egui::vec2(handle_hit_size, handle_hit_size));
         if handle_rect.contains(pos) {
             return Some(*handle_type);
         }
@@ -524,7 +536,7 @@ pub fn get_transform_handle_at_pos(bbox: egui::Rect, pos: Pos2) -> Option<Transf
     // 检查旋转句柄
     let rotate_pos = Pos2::new(bbox.center().x, bbox.top() - 20.0);
     let rotate_rect =
-        egui::Rect::from_center_size(rotate_pos, egui::vec2(handle_hit_size, handle_hit_size));
+        Rect::from_center_size(rotate_pos, egui::vec2(handle_hit_size, handle_hit_size));
     if rotate_rect.contains(pos) {
         return Some(TransformHandle::Rotate);
     }

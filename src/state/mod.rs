@@ -1,6 +1,8 @@
-use egui::Color32;
-use egui::Pos2;
-use egui::Stroke;
+pub mod flat;
+
+use flat::CanvasStateFlat;
+
+use egui::{Color32, Pos2, Stroke};
 use egui_notify::Toasts;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,9 +23,6 @@ use rodio::Player;
 use std::io::Cursor;
 
 use crate::utils;
-
-pub mod flat;
-use flat::CanvasStateFlat;
 
 /// Dynamic brush width mode for stroke rendering
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -705,7 +704,7 @@ pub struct PersistentState {
     #[serde(default)]
     pub theme_mode: ThemeMode,
     #[serde(default)]
-    pub background_color: Color32,
+    pub canvas_color: Color32,
     #[serde(default)]
     pub window_opacity: f32,
 
@@ -749,7 +748,7 @@ impl Default for PersistentState {
     fn default() -> Self {
         Self {
             theme_mode: ThemeMode::default(),
-            background_color: Color32::from_rgb(15, 38, 30),
+            canvas_color: utils::get_default_canvas_color(),
             window_opacity: 1.0,
 
             stroke_smoothing: true,
@@ -1438,22 +1437,21 @@ pub struct AppState {
     pub persistent: PersistentState,
 
     // ui states
-    pub show_size_preview: bool,
-    pub show_insert_text_dialog: bool,
-    pub new_text_content: String,
-    pub show_insert_shape_dialog: bool,
-    pub should_quit: bool,
+    pub show_quick_color_edit_window: bool, // 是否显示快捷颜色编辑器
+    pub show_insert_text_window: bool,
+    pub show_insert_shape_window: bool,
     pub show_welcome_window: bool,
-    pub available_video_modes: Vec<winit::monitor::VideoModeHandle>,
+    pub show_page_management_window: bool,
+
+    pub show_size_preview: bool,
+    pub new_text_content: String,
+    pub should_quit: bool,
+    pub fullscreen_video_modes: Vec<winit::monitor::VideoModeHandle>,
     pub selected_video_mode_index: Option<usize>, // 选中的视频模式索引
     pub fps_counter: FpsCounter,                  // FPS 计数器
-    pub show_quick_color_editor: bool,            // 是否显示快捷颜色编辑器
     pub new_quick_color: Color32,                 // 新快捷颜色，用于添加
-    pub show_touch_points: bool,                  // 是否显示触控点，用于调试
-
-    // reactive states
-    pub window_mode_changed: bool,  // 窗口模式是否已更改
-    pub present_mode_changed: bool, // 垂直同步模式是否已更改
+    pub touch_used: bool, // 标志当前帧是否已由触控处理，防止鼠标代码重复处理
+    pub show_touch_points: bool, // 是否显示触控点，用于调试
 
     #[cfg(target_os = "windows")]
     pub show_console: bool, // 是否显示控制台 [仅 Windows]
@@ -1487,18 +1485,18 @@ impl Default for AppState {
             show_size_preview: false,
             fps_counter: FpsCounter::new(),
             should_quit: false,
-            show_insert_text_dialog: false,
+            show_insert_text_window: false,
             new_text_content: "".to_string(),
-            show_insert_shape_dialog: false,
+            show_insert_shape_window: false,
             touch_points: HashMap::new(),
-            window_mode_changed: false,
-            available_video_modes: Vec::new(),
+            fullscreen_video_modes: Vec::new(),
             selected_video_mode_index: None,
-            show_quick_color_editor: false,
+            show_quick_color_edit_window: false,
             new_quick_color: Color32::WHITE,
+            touch_used: false,
             show_touch_points: false,
-            present_mode_changed: false,
             show_welcome_window: true,
+            show_page_management_window: false,
             persistent: PersistentState::load_from_file(),
             toasts: Toasts::default()
                 .with_anchor(egui_notify::Anchor::BottomRight)
@@ -1512,5 +1510,3 @@ impl Default for AppState {
         }
     }
 }
-
-pub const ICON: &[u8] = include_bytes!("../assets/images/app_icon/icon.ico");
