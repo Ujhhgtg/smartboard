@@ -1,37 +1,61 @@
 [package]
 name = "smartboard"
-description = "A powerful digital whiteboard and drawing application built with Rust, winit, egui, and wgpu."
-version = "0.0.1"
+description = "A powerful digital whiteboard built with Rust, winit, egui, and wgpu."
+version = "0.1.0-rc.1"
 edition = "2024"
-repository = "https://github.com/Ujhhgtg/smartboard"
+repository = "https://github.com/Ujhhgtg/smartboard/"
 license-file = "LICENSE"
-readme = "README.md"
+
+[features]
+default = ["system_font"]
+startup_animation = ["rodio"]
+embedded_font = []
+system_font = ["fontdb"]
 
 [dependencies]
-egui = { version = "0.34.1", features = ["serde"], default-features = false }
-egui-wgpu = { version = "0.34.1", features = ["winit", "wayland"] }
-egui-winit = { version = "0.34.1", default-features = false, features = [
+# ui & render
+egui = { version = "0.34", default-features = false, features = ["serde"] }
+egui-winit = { version = "0.34", default-features = false, features = [
     "wayland",
 ] }
-wgpu = { version = "29.0.1", features = ["webgpu", "serde"] }
-winit = { version = "0.30.12", features = [
-    "wayland",
-], default-features = false }
-pollster = "*"
+winit = { version = "0.30", default-features = false, features = ["wayland"] }
+egui-wgpu = { version = "0.34", features = ["winit", "wayland"] }
+wgpu = { version = "29", default-features = false, features = [
+    "dx12",
+    "metal",
+    "parking_lot",
+    "serde",
+    "std",
+    "vulkan",
+    "wgsl",
+] }
+
+# ui utils
+egui-notify = "*"
+image = { version = "*", default-features = false, features = [
+    "ico",
+    "jpeg",
+    "webp",
+] }
+tray-icon = "*"
+ttf-parser = "*"
 rfd = "*"
-image = { version = "*", features = [
-    "default-formats",
-], default-features = false }
+
+# serialization
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+rkyv = { version = "0.8", features = ["alloc", "bytecheck"] }
+
+# utils
+pollster = "*"
+dirs = "*"
+
+# features dependencies
 rodio = { version = "*", default-features = false, features = [
     "wav",
     "playback",
-] }
-serde = { version = "*", features = ["derive"] }
-serde_json = "*"
-dirs = "*"
-egui-notify = "*"
-ttf-parser = "*"
-tray-icon = "*"
+], optional = true }
+fontdb = { version = "*", optional = true }
 
 [build-dependencies]
 shellexpand = "*"
@@ -47,6 +71,15 @@ windows = { version = "*", features = [
     "Win32_Foundation",
 ] }
 windows-core = { version = "*", default-features = false }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+debug = 0
+
+[profile.release.package."*"]
+opt-level = "z"
 
 [lints.clippy]
 collapsible_if = "allow"

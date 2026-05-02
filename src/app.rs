@@ -1,8 +1,9 @@
 use crate::render::RenderState;
 use crate::state::{
-    AppState, CanvasImage, CanvasObject, CanvasObjectOps, CanvasShape, CanvasShapeType,
-    CanvasState, CanvasText, CanvasTool, DynamicBrushWidthMode, FONT, History, ICON,
-    OptimizationPolicy, PageState, PersistentState, StartupAnimation, ThemeMode, WindowMode,
+    ActiveStroke, AppState, CanvasImage, CanvasObject, CanvasObjectOps, CanvasShape,
+    CanvasShapeType, CanvasState, CanvasStroke, CanvasText, CanvasTool, DynamicBrushWidthMode,
+    History, ICON, OptimizationPolicy, PageState, PersistentState, StrokeWidth, ThemeMode,
+    WindowMode,
 };
 use crate::{UserEvent, utils};
 use core::f32;
@@ -19,11 +20,14 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
-// 启动动画
+#[cfg(feature = "startup_animation")]
+use crate::state::StartupAnimation;
+#[cfg(feature = "startup_animation")]
 include!(concat!(env!("OUT_DIR"), "/startup_frames.rs"));
-pub const STARTUP_AUDIO: &[u8] = include_bytes!("../assets/startup_animation/audio.wav");
+#[cfg(feature = "startup_animation")]
+const STARTUP_AUDIO: &[u8] = include_bytes!("../assets/startup_animation/audio.wav");
 
-pub enum PageAction {
+enum PageAction {
     None,
     Previous,
     Next,
@@ -31,7 +35,7 @@ pub enum PageAction {
     Delete,
 }
 
-pub fn switch_to_page_state(state: &mut AppState, page_index: usize) {
+fn switch_to_page_state(state: &mut AppState, page_index: usize) {
     let old = state.current_page;
     if old != page_index {
         std::mem::swap(&mut state.canvas, &mut state.pages[old].canvas);
@@ -44,14 +48,15 @@ pub fn switch_to_page_state(state: &mut AppState, page_index: usize) {
     state.drag_start_pos = None;
     state.dragged_handle = None;
     state.drag_move_accumulated_delta = egui::Vec2::ZERO;
+    state.drag_original_transform = None;
     state.active_strokes.clear();
     state.is_drawing = false;
 }
 
-pub fn add_new_page_state(state: &mut AppState) {
+fn add_new_page_state(state: &mut AppState) {
     let old = state.current_page;
     state.pages[old].canvas = std::mem::take(&mut state.canvas);
-    state.pages[old].history = std::mem::replace(&mut state.history, History::new(50));
+    state.pages[old].history = std::mem::take(&mut state.history);
     state.pages.push(PageState::default());
     let new_idx = state.pages.len() - 1;
     state.current_page = new_idx;
@@ -59,11 +64,34 @@ pub fn add_new_page_state(state: &mut AppState) {
     state.drag_start_pos = None;
     state.dragged_handle = None;
     state.drag_move_accumulated_delta = egui::Vec2::ZERO;
+    state.drag_original_transform = None;
     state.active_strokes.clear();
     state.is_drawing = false;
 }
 
-pub fn apply_page_action(state: &mut AppState, action: PageAction) {
+fn load_canvas_from_file(state: &mut AppState) {
+    match CanvasState::load_from_file_with_dialog() {
+        Ok(canvas) => {
+            let page = PageState {
+                canvas,
+                history: History::default(),
+            };
+            let new_idx = state.pages.len();
+            state.pages.push(page.clone());
+            state.current_page = new_idx;
+            state.canvas = page.canvas;
+            state.history = page.history;
+            state.selected_object = None;
+            state.show_welcome_window = false;
+            state.toasts.success("成功加载画布!");
+        }
+        Err(err) => {
+            state.toasts.error(format!("画布加载失败: {}!", err));
+        }
+    };
+}
+
+fn apply_page_action(state: &mut AppState, action: PageAction) {
     match action {
         PageAction::Previous if state.current_page > 0 => {
             switch_to_page_state(state, state.current_page - 1);
@@ -81,14 +109,12 @@ pub fn apply_page_action(state: &mut AppState, action: PageAction) {
                 state.current_page = state.pages.len() - 1;
             }
             state.canvas = std::mem::take(&mut state.pages[state.current_page].canvas);
-            state.history = std::mem::replace(
-                &mut state.pages[state.current_page].history,
-                History::new(50),
-            );
+            state.history = std::mem::take(&mut state.pages[state.current_page].history);
             state.selected_object = None;
             state.drag_start_pos = None;
             state.dragged_handle = None;
             state.drag_move_accumulated_delta = egui::Vec2::ZERO;
+            state.drag_original_transform = None;
             state.active_strokes.clear();
             state.is_drawing = false;
         }
@@ -108,10 +134,11 @@ impl App {
         let gpu_instance = egui_wgpu::wgpu::Instance::default();
         let mut state = AppState::default();
 
-        // init
         if !state.persistent.show_welcome_window_on_start {
             state.show_welcome_window = false
         }
+
+        #[cfg(feature = "startup_animation")]
         if state.persistent.show_startup_animation {
             state.startup_animation =
                 Some(StartupAnimation::new(30.0, STARTUP_FRAMES, STARTUP_AUDIO));
@@ -189,6 +216,30 @@ impl App {
             self.state.persistent.present_mode,
         )
         .await;
+
+        let ctx = state.egui_renderer.context();
+
+        // 设置主题模式
+        match self.state.persistent.theme_mode {
+            ThemeMode::System => {
+                ctx.set_visuals(egui::Visuals {
+                    panel_fill: self.state.persistent.background_color,
+                    ..Default::default()
+                });
+            }
+            ThemeMode::Light => {
+                ctx.set_visuals(egui::Visuals {
+                    panel_fill: self.state.persistent.background_color,
+                    ..egui::Visuals::light()
+                });
+            }
+            ThemeMode::Dark => {
+                ctx.set_visuals(egui::Visuals {
+                    panel_fill: self.state.persistent.background_color,
+                    ..egui::Visuals::dark()
+                });
+            }
+        }
 
         self.window.get_or_insert(window);
         self.render_state.get_or_insert(state);
@@ -300,28 +351,7 @@ impl App {
         render_state.egui_renderer.begin_frame(window);
         let ctx = render_state.egui_renderer.context();
 
-        // 应用主题设置
-        match self.state.persistent.theme_mode {
-            ThemeMode::System => {
-                ctx.set_visuals(egui::Visuals {
-                    panel_fill: self.state.persistent.background_color,
-                    ..Default::default()
-                });
-            }
-            ThemeMode::Light => {
-                ctx.set_visuals(egui::Visuals {
-                    panel_fill: self.state.persistent.background_color,
-                    ..egui::Visuals::light()
-                });
-            }
-            ThemeMode::Dark => {
-                ctx.set_visuals(egui::Visuals {
-                    panel_fill: self.state.persistent.background_color,
-                    ..egui::Visuals::dark()
-                });
-            }
-        }
-
+        #[cfg(feature = "startup_animation")]
         if let Some(anim) = &mut self.state.startup_animation {
             if !anim.is_finished() {
                 anim.update(ctx);
@@ -342,22 +372,29 @@ impl App {
                 .collapsible(false)
                 .movable(false)
                 .pivot(egui::Align2::CENTER_CENTER)
-                .default_pos([center_pos.x, center_pos.y])
+                .current_pos(center_pos)
                 .order(egui::Order::Foreground)
-                .enabled(if let Some(anim) = &self.state.startup_animation {
-                    anim.is_finished()
-                } else {
+                .enabled({
+                    #[cfg(feature = "startup_animation")]
+                    if let Some(anim) = &self.state.startup_animation {
+                        anim.is_finished()
+                    } else {
+                        true
+                    }
+                    #[cfg(not(feature = "startup_animation"))]
                     true
                 })
                 .show(ctx, |ui| {
                     ui.heading("欢迎使用 smartboard");
                     ui.separator();
 
-                    ui.label("这是一个功能强大的数字画板应用程序，您可以：");
+                    ui.label("这是一个功能强大的数字画板应用，您可以：");
                     ui.label("• 绘制和涂鸦");
                     ui.label("• 使用各种工具进行编辑");
                     ui.label("• 插入图片、文本和形状");
                     ui.label("• 自定义画板设置");
+                    ui.label("• 保存和加载画布到文件");
+                    ui.label("• 享受超快的启动速度与超高的流畅度");
                     ui.separator();
 
                     if ui.button("新建画布").clicked() {
@@ -370,22 +407,7 @@ impl App {
                         self.state.show_welcome_window = false;
                     }
                     if ui.button("加载画布").clicked() {
-                        match CanvasState::load_from_file_with_dialog() {
-                            Ok(canvas) => {
-                                let page = PageState {
-                                    canvas: canvas.clone(),
-                                    history: History::new(50),
-                                };
-                                self.state.pages = vec![page.clone()];
-                                self.state.current_page = 0;
-                                self.state.canvas = page.canvas;
-                                self.state.history = page.history;
-                                self.state.selected_object = None;
-                                self.state.show_welcome_window = false;
-                                self.state.toasts.success("成功加载画布!")
-                            }
-                            Err(err) => self.state.toasts.error(format!("画布加载失败: {}!", err)),
-                        };
+                        load_canvas_from_file(&mut self.state);
                     }
 
                     ui.separator();
@@ -406,12 +428,16 @@ impl App {
             .pivot(egui::Align2::CENTER_BOTTOM)
             .default_pos([content_rect.center().x, content_rect.max.y - margin])
             .enabled(
-                !self.state.show_welcome_window
-                    && if let Some(anim) = &self.state.startup_animation {
+                !self.state.show_welcome_window && {
+                    #[cfg(feature = "startup_animation")]
+                    if let Some(anim) = &self.state.startup_animation {
                         anim.is_finished()
                     } else {
                         true
-                    },
+                    }
+                    #[cfg(not(feature = "startup_animation"))]
+                    true
+                },
             )
             .show(ctx, |ui| {
                 // 工具选择
@@ -528,8 +554,10 @@ impl App {
                                         {
                                             if let CanvasObject::Text(text) = &text_obj {
                                                 // 转换文本为笔画
-                                                let strokes =
-                                                    crate::utils::rasterize_text(text, FONT);
+                                                let strokes = crate::utils::rasterize_text(
+                                                    text,
+                                                    utils::font_bytes(),
+                                                );
 
                                                 // 删除原文本对象
                                                 self.state.canvas.objects.remove(selected_idx);
@@ -580,9 +608,9 @@ impl App {
                                 for (_touch_id, active_stroke) in self.state.active_strokes.drain()
                                 {
                                     self.state.canvas.objects.push(CanvasObject::Stroke(
-                                        crate::state::CanvasStroke {
+                                        CanvasStroke {
                                             points: active_stroke.points,
-                                            widths: active_stroke.widths,
+                                            width: active_stroke.width,
                                             color: old_color,
                                             base_width: self.state.brush_width,
                                             rot: 0.0,
@@ -974,21 +1002,45 @@ impl App {
 
                         ui.horizontal(|ui| {
                             ui.label("主题模式:");
-                            ui.selectable_value(
-                                &mut self.state.persistent.theme_mode,
-                                ThemeMode::System,
-                                "跟随系统",
-                            );
-                            ui.selectable_value(
-                                &mut self.state.persistent.theme_mode,
-                                ThemeMode::Light,
-                                "浅色模式",
-                            );
-                            ui.selectable_value(
-                                &mut self.state.persistent.theme_mode,
-                                ThemeMode::Dark,
-                                "深色模式",
-                            );
+                            if ui
+                                .selectable_value(
+                                    &mut self.state.persistent.theme_mode,
+                                    ThemeMode::System,
+                                    "跟随系统",
+                                )
+                                .clicked()
+                            {
+                                ctx.set_visuals(egui::Visuals {
+                                    panel_fill: self.state.persistent.background_color,
+                                    ..Default::default()
+                                });
+                            }
+                            if ui
+                                .selectable_value(
+                                    &mut self.state.persistent.theme_mode,
+                                    ThemeMode::Light,
+                                    "浅色模式",
+                                )
+                                .clicked()
+                            {
+                                ctx.set_visuals(egui::Visuals {
+                                    panel_fill: self.state.persistent.background_color,
+                                    ..egui::Visuals::light()
+                                });
+                            }
+                            if ui
+                                .selectable_value(
+                                    &mut self.state.persistent.theme_mode,
+                                    ThemeMode::Dark,
+                                    "深色模式",
+                                )
+                                .clicked()
+                            {
+                                ctx.set_visuals(egui::Visuals {
+                                    panel_fill: self.state.persistent.background_color,
+                                    ..egui::Visuals::dark()
+                                });
+                            }
                         });
 
                         ui.horizontal(|ui| {
@@ -999,6 +1051,7 @@ impl App {
                             );
                         });
 
+                        #[cfg(feature = "startup_animation")]
                         ui.horizontal(|ui| {
                             ui.label("显示启动动画:");
                             ui.checkbox(&mut self.state.persistent.show_startup_animation, "");
@@ -1017,24 +1070,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label("画布持久化:");
                             if ui.button("加载").clicked() {
-                                match CanvasState::load_from_file_with_dialog() {
-                                    Ok(canvas) => {
-                                        let page = PageState {
-                                            canvas: canvas.clone(),
-                                            history: History::new(50),
-                                        };
-                                        self.state.pages = vec![page.clone()];
-                                        self.state.current_page = 0;
-                                        self.state.canvas = page.canvas;
-                                        self.state.history = page.history;
-                                        self.state.selected_object = None;
-                                        self.state.show_welcome_window = false;
-                                        self.state.toasts.success("成功加载画布!");
-                                    }
-                                    Err(err) => {
-                                        self.state.toasts.error(format!("画布加载失败: {}!", err));
-                                    }
-                                };
+                                load_canvas_from_file(&mut self.state);
                             }
                             if ui.button("保存").clicked() {
                                 match self.state.canvas.save_to_file_with_dialog() {
@@ -1323,6 +1359,11 @@ impl App {
                                 "资源用量",
                             );
                         });
+
+                        ui.horizontal(|ui| {
+                            ui.label("强制每帧重绘:");
+                            ui.checkbox(&mut self.state.persistent.force_redraw_every_frame, "");
+                        });
                     });
 
                     ui.collapsing("调试", |ui| {
@@ -1371,35 +1412,33 @@ impl App {
                             ui.label("压力测试:");
                             if ui.button("OK").clicked() {
                                 // 使用固定颜色和宽度
-                                let stress_color = Color32::from_rgb(255, 0, 0); // 红色
-                                let stress_width = 3.0;
+                                const STRESS_COLOR: Color32 = Color32::from_rgb(255, 0, 0); // 红色
+                                const STRESS_WIDTH: f32 = 3.0;
 
-                                // 添加1000条笔画
+                                // 添加 1000 条笔画
                                 for i in 0..1000 {
                                     let mut points = Vec::new();
-                                    let mut widths = Vec::new();
 
-                                    let num_points = 100;
+                                    const NUM_POINTS: i32 = 100;
 
                                     // 生成笔画位置
                                     let start_x = (i as f32 % 20.0) * 50.0;
                                     let start_y = ((i as f32 / 20.0).floor() % 15.0) * 50.0;
 
                                     // 生成笔画方向和长度
-                                    for j in 0..num_points {
+                                    for j in 0..NUM_POINTS {
                                         let x = start_x + (j as f32 * 10.0);
                                         let y = start_y + (j as f32 * 5.0);
 
                                         points.push(Pos2::new(x, y));
-                                        widths.push(stress_width);
                                     }
 
                                     // 创建笔画对象
-                                    let stroke = crate::state::CanvasStroke {
+                                    let stroke = CanvasStroke {
                                         points,
-                                        widths,
-                                        color: stress_color,
-                                        base_width: stress_width,
+                                        width: STRESS_WIDTH.into(),
+                                        color: STRESS_COLOR,
+                                        base_width: STRESS_WIDTH,
                                         rot: 0.0,
                                     };
 
@@ -1409,7 +1448,7 @@ impl App {
                         });
 
                         ui.horizontal(|ui| {
-                            ui.label("保存设置:");
+                            ui.label("立即保存设置:");
                             if ui.button("OK").clicked() {
                                 if let Err(err) = self.state.persistent.save_to_file() {
                                     self.state.toasts.error(format!("设置保存失败: {}!", err));
@@ -1484,12 +1523,16 @@ impl App {
             let margin = 8.0;
             let total_pages = self.state.pages.len();
             let current = self.state.current_page;
-            let enabled = !self.state.show_welcome_window
-                && if let Some(anim) = &self.state.startup_animation {
+            let enabled = !self.state.show_welcome_window && {
+                #[cfg(feature = "startup_animation")]
+                if let Some(anim) = &self.state.startup_animation {
                     anim.is_finished()
                 } else {
                     true
-                };
+                }
+                #[cfg(not(feature = "startup_animation"))]
+                true
+            };
 
             if enabled {
                 let mut action = PageAction::None;
@@ -1587,9 +1630,6 @@ impl App {
 
             let painter = ui.painter();
 
-            // 绘制背景
-            painter.rect_filled(rect, 0.0, self.state.persistent.background_color);
-
             // 绘制所有对象
             for (i, object) in self.state.canvas.objects.iter().enumerate() {
                 let selected = self.state.selected_object == Some(i);
@@ -1599,26 +1639,29 @@ impl App {
             // 绘制当前正在绘制的笔画
             // TODO: unify with CanvasStroke::paint()
             for active_stroke in self.state.active_strokes.values() {
-                if active_stroke.widths.len() == active_stroke.points.len() {
+                if let StrokeWidth::Dynamic(v) = &active_stroke.width {
+                    if v.len() != active_stroke.points.len() {
+                        continue;
+                    }
+                }
+                painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
+                    active_stroke.points[0],
+                    active_stroke.width.first() / 2.0,
+                    self.state.brush_color,
+                )));
+                if active_stroke.points.len() >= 2 {
                     painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
-                        active_stroke.points[0],
-                        active_stroke.widths[0] / 2.0,
+                        active_stroke.points[active_stroke.points.len() - 1],
+                        active_stroke.width.last() / 2.0,
                         self.state.brush_color,
                     )));
-                    if active_stroke.points.len() >= 2 {
-                        painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
-                            active_stroke.points[active_stroke.points.len() - 1],
-                            active_stroke.widths[active_stroke.points.len() - 1] / 2.0,
-                            self.state.brush_color,
-                        )));
-                        for i in 0..active_stroke.points.len() - 1 {
-                            let avg_width =
-                                (active_stroke.widths[i] + active_stroke.widths[i + 1]) / 2.0;
-                            painter.line_segment(
-                                [active_stroke.points[i], active_stroke.points[i + 1]],
-                                Stroke::new(avg_width, self.state.brush_color),
-                            );
-                        }
+                    for i in 0..active_stroke.points.len() - 1 {
+                        let avg_width =
+                            (active_stroke.width.get(i) + active_stroke.width.get(i + 1)) / 2.0;
+                        painter.line_segment(
+                            [active_stroke.points[i], active_stroke.points[i + 1]],
+                            Stroke::new(avg_width, self.state.brush_color),
+                        );
                     }
                 }
             }
@@ -1717,6 +1760,8 @@ impl App {
                                         utils::get_transform_handle_at_pos(bbox, pos)
                                     {
                                         self.state.dragged_handle = Some(handle);
+                                        self.state.drag_original_transform =
+                                            Some(object.get_transform());
                                     }
                                 }
                             }
@@ -1732,32 +1777,16 @@ impl App {
 
                             if let Some(selected_idx) = self.state.selected_object {
                                 if let Some(dragged_handle) = self.state.dragged_handle {
-                                    // Resize operation - save state before modification
+                                    // Resize operation — history saved on drag_stopped
                                     if let Some(object) =
-                                        self.state.canvas.objects.get(selected_idx)
+                                        self.state.canvas.objects.get_mut(selected_idx)
                                     {
-                                        let old_transform = object.get_transform();
-                                        if let Some(object) =
-                                            self.state.canvas.objects.get_mut(selected_idx)
-                                        {
-                                            object.transform(
-                                                dragged_handle,
-                                                delta,
-                                                drag_start,
-                                                current_pos,
-                                            );
-                                        }
-                                        // Save the transform operation to history
-                                        if let Some(object) =
-                                            self.state.canvas.objects.get(selected_idx)
-                                        {
-                                            let new_transform = object.get_transform();
-                                            self.state.history.save_transform_object(
-                                                selected_idx,
-                                                old_transform,
-                                                new_transform,
-                                            );
-                                        }
+                                        object.transform(
+                                            dragged_handle,
+                                            delta,
+                                            drag_start,
+                                            current_pos,
+                                        );
                                     }
                                 } else {
                                     // Move operation
@@ -1775,7 +1804,7 @@ impl App {
                         }
                     }
 
-                    // Handle drag stop: clear drag state
+                    // Handle drag stop: save move/resize to history and clear state
                     if response.drag_stopped() {
                         if self.state.drag_move_accumulated_delta != egui::Vec2::ZERO {
                             if let Some(selected_idx) = self.state.selected_object {
@@ -1784,6 +1813,19 @@ impl App {
                                     -self.state.drag_move_accumulated_delta,
                                     self.state.drag_move_accumulated_delta,
                                 );
+                            }
+                        } else if let Some(original_transform) =
+                            self.state.drag_original_transform.take()
+                        {
+                            if let Some(selected_idx) = self.state.selected_object {
+                                if let Some(object) = self.state.canvas.objects.get(selected_idx) {
+                                    let new_transform = object.get_transform();
+                                    self.state.history.save_transform_object(
+                                        selected_idx,
+                                        original_transform,
+                                        new_transform,
+                                    );
+                                }
                             }
                         }
                         self.state.drag_start_pos = None;
@@ -1857,72 +1899,66 @@ impl App {
                             // 绘制指针
                             utils::draw_size_preview(painter, pos, self.state.eraser_size);
 
-                            // 从所有笔画中移除被橡皮擦覆盖的段落
                             let eraser_radius = self.state.eraser_size / 2.0;
+                            let eraser_rect = egui::Rect::from_center_size(
+                                pos,
+                                egui::vec2(self.state.eraser_size, self.state.eraser_size),
+                            );
 
-                            // 我们需要收集所有新的笔画，因为我们可能需要将一个笔画分割为多个
                             let mut new_strokes = Vec::new();
+                            let mut strokes_modified = false;
 
                             for object in &self.state.canvas.objects {
                                 if let CanvasObject::Stroke(stroke) = object {
                                     if stroke.points.len() < 2 {
+                                        new_strokes.push(stroke.clone());
                                         continue;
                                     }
+
+                                    // Quick bounding box filter — skip strokes far from eraser
+                                    if !stroke.bounding_box().intersects(eraser_rect) {
+                                        new_strokes.push(stroke.clone());
+                                        continue;
+                                    }
+
+                                    strokes_modified = true;
 
                                     let mut current_points = Vec::new();
                                     let mut current_widths = Vec::new();
 
-                                    // 添加第一个点
                                     current_points.push(stroke.points[0]);
-                                    if !stroke.widths.is_empty() {
-                                        current_widths.push(stroke.widths[0]);
-                                    }
+                                    current_widths.push(stroke.width.first());
 
-                                    // 检查每个段落
                                     for i in 0..stroke.points.len() - 1 {
                                         let p1 = stroke.points[i];
                                         let p2 = stroke.points[i + 1];
-                                        let segment_width = if i < stroke.widths.len() {
-                                            stroke.widths[i]
-                                        } else {
-                                            stroke.widths[0]
-                                        };
+                                        let segment_width = stroke.width.get(i);
 
-                                        // 计算点到线段的距离
                                         let dist =
                                             utils::point_to_line_segment_distance(pos, p1, p2);
 
-                                        // 如果段落不被橡皮擦覆盖，保留第二个点
                                         if dist > eraser_radius + segment_width / 2.0 {
                                             current_points.push(p2);
-                                            if i + 1 < stroke.widths.len() {
-                                                current_widths.push(stroke.widths[i + 1]);
-                                            } else if !stroke.widths.is_empty() {
-                                                current_widths
-                                                    .push(stroke.widths[stroke.widths.len() - 1]);
-                                            }
+                                            current_widths.push(stroke.width.get(i + 1));
                                         } else {
-                                            // 段落被擦除，如果当前笔画有足够的点，保存它
                                             if current_points.len() >= 2 {
-                                                new_strokes.push(crate::state::CanvasStroke {
+                                                new_strokes.push(CanvasStroke {
                                                     points: current_points.clone(),
-                                                    widths: current_widths.clone(),
+                                                    width: current_widths.clone().into(),
                                                     color: stroke.color,
                                                     base_width: stroke.base_width,
                                                     rot: 0.0,
                                                 });
                                             }
-                                            // 开始新的笔画段落
                                             current_points = Vec::new();
                                             current_widths = Vec::new();
                                         }
                                     }
 
-                                    // 添加最后一个笔画段落
                                     if current_points.len() >= 2 {
-                                        new_strokes.push(crate::state::CanvasStroke {
+                                        new_strokes.push(CanvasStroke {
                                             points: current_points,
-                                            widths: current_widths,
+                                            width: current_widths.into(),
                                             color: stroke.color,
                                             base_width: stroke.base_width,
                                             rot: 0.0,
@@ -1931,39 +1967,38 @@ impl App {
                                 }
                             }
 
-                            // 如果有笔画被修改，保存状态到历史记录
-                            let original_stroke_count = self
-                                .state
-                                .canvas
-                                .objects
-                                .iter()
-                                .filter(|obj| matches!(obj, CanvasObject::Stroke(_)))
-                                .count();
-                            let new_stroke_count = new_strokes.len();
-                            if original_stroke_count != new_stroke_count {
-                                // Clone only non-stroke objects (few) and O(1)-move the full vec into history
-                                let non_strokes: Vec<_> = self
+                            if strokes_modified {
+                                let original_stroke_count = self
                                     .state
                                     .canvas
                                     .objects
                                     .iter()
-                                    .filter(|obj| !matches!(obj, CanvasObject::Stroke(_)))
-                                    .cloned()
-                                    .collect();
-                                let old_objects = std::mem::take(&mut self.state.canvas.objects);
-                                self.state.history.save_clear_objects(old_objects);
-                                self.state.canvas.objects = non_strokes;
-                            } else {
-                                // Strip old strokes in-place
-                                self.state
-                                    .canvas
-                                    .objects
-                                    .retain(|obj| !matches!(obj, CanvasObject::Stroke(_)));
-                            }
+                                    .filter(|obj| matches!(obj, CanvasObject::Stroke(_)))
+                                    .count();
+                                let new_stroke_count = new_strokes.len();
+                                if original_stroke_count != new_stroke_count {
+                                    let non_strokes: Vec<_> = self
+                                        .state
+                                        .canvas
+                                        .objects
+                                        .iter()
+                                        .filter(|obj| !matches!(obj, CanvasObject::Stroke(_)))
+                                        .cloned()
+                                        .collect();
+                                    let old_objects =
+                                        std::mem::take(&mut self.state.canvas.objects);
+                                    self.state.history.save_clear_objects(old_objects);
+                                    self.state.canvas.objects = non_strokes;
+                                } else {
+                                    self.state
+                                        .canvas
+                                        .objects
+                                        .retain(|obj| !matches!(obj, CanvasObject::Stroke(_)));
+                                }
 
-                            // 添加处理后的笔画
-                            for stroke in new_strokes {
-                                self.state.canvas.objects.push(CanvasObject::Stroke(stroke));
+                                for stroke in new_strokes {
+                                    self.state.canvas.objects.push(CanvasObject::Stroke(stroke));
+                                }
                             }
                         }
                     }
@@ -2000,9 +2035,9 @@ impl App {
                             && pos.y <= rect.max.y
                         {
                             // Save state to history before modification
-                            let new_stroke = crate::state::CanvasStroke {
+                            let new_stroke = CanvasStroke {
                                 points: vec![pos],
-                                widths: vec![self.state.brush_width],
+                                width: StrokeWidth::Fixed(self.state.brush_width),
                                 color: self.state.brush_color,
                                 base_width: self.state.brush_width,
                                 rot: 0.0,
@@ -2082,9 +2117,9 @@ fn brush_stroke_start(state: &mut AppState, touch_id: u64, pos: Pos2) {
     );
     state.active_strokes.insert(
         touch_id,
-        crate::state::ActiveStroke {
+        ActiveStroke {
             points: vec![pos],
-            widths: vec![width],
+            width,
             times: vec![0.0],
             start_time,
             last_movement_time: start_time,
@@ -2109,15 +2144,20 @@ fn brush_stroke_add_point(
                     state.persistent.stroke_straightening_tolerance,
                 );
                 if straightened_points.len() != active_stroke.points.len() {
+                    let has_dynamic_mode =
+                        state.dynamic_brush_width_mode != DynamicBrushWidthMode::Disabled;
                     active_stroke.points = straightened_points;
-                    if !active_stroke.widths.is_empty() {
-                        let first_width = active_stroke.widths[0];
-                        let last_width = *active_stroke.widths.last().unwrap();
-                        active_stroke.widths = if active_stroke.points.len() == 1 {
-                            vec![first_width]
-                        } else {
-                            vec![first_width, last_width]
-                        };
+                    if let StrokeWidth::Dynamic(v) = &active_stroke.width {
+                        if !v.is_empty() {
+                            let first_width = v[0];
+                            let last_width = *v.last().unwrap();
+                            active_stroke.width =
+                                if active_stroke.points.len() == 1 && !has_dynamic_mode {
+                                    StrokeWidth::Fixed(first_width)
+                                } else {
+                                    StrokeWidth::Dynamic(vec![first_width, last_width])
+                                };
+                        }
                     }
                 }
                 active_stroke.last_movement_time = Instant::now();
@@ -2139,14 +2179,16 @@ fn brush_stroke_add_point(
             active_stroke.points.push(pos);
             active_stroke.times.push(current_time);
 
-            let width = utils::calculate_dynamic_width(
-                state.brush_width,
-                state.dynamic_brush_width_mode,
-                active_stroke.points.len() - 1,
-                active_stroke.points.len(),
-                speed,
-            );
-            active_stroke.widths.push(width);
+            if state.dynamic_brush_width_mode != DynamicBrushWidthMode::Disabled {
+                let stroke_width = utils::calculate_dynamic_width(
+                    state.brush_width,
+                    state.dynamic_brush_width_mode,
+                    active_stroke.points.len() - 1,
+                    active_stroke.points.len(),
+                    speed,
+                );
+                active_stroke.width.push(stroke_width.first());
+            }
 
             active_stroke.last_movement_time = Instant::now();
         }
@@ -2155,32 +2197,36 @@ fn brush_stroke_add_point(
 
 fn brush_stroke_end(state: &mut AppState, touch_id: u64) {
     if let Some(active_stroke) = state.active_strokes.remove(&touch_id) {
-        if active_stroke.widths.len() == active_stroke.points.len() {
-            let final_points = if state.persistent.stroke_smoothing {
-                utils::apply_stroke_smoothing(&active_stroke.points)
-            } else {
-                active_stroke.points
-            };
-
-            let (interpolated_points, interpolated_widths) = utils::apply_point_interpolation(
-                &final_points,
-                &active_stroke.widths,
-                state.persistent.interpolation_frequency,
-            );
-
-            let new_stroke = crate::state::CanvasStroke {
-                points: interpolated_points,
-                widths: interpolated_widths,
-                color: state.brush_color,
-                base_width: state.brush_width,
-                rot: 0.0,
-            };
-            let index = state.canvas.objects.len();
-            state
-                .history
-                .save_add_object(index, CanvasObject::Stroke(new_stroke.clone()));
-            state.canvas.objects.push(CanvasObject::Stroke(new_stroke));
+        if let StrokeWidth::Dynamic(v) = &active_stroke.width {
+            if v.len() != active_stroke.points.len() {
+                return;
+            }
         }
+
+        let mut final_points = if state.persistent.stroke_smoothing {
+            utils::apply_stroke_smoothing(&active_stroke.points)
+        } else {
+            active_stroke.points
+        };
+
+        let width = utils::apply_point_interpolation_in_place(
+            &mut final_points,
+            &active_stroke.width,
+            state.persistent.interpolation_frequency,
+        );
+
+        let new_stroke = CanvasStroke {
+            points: final_points,
+            width,
+            color: state.brush_color,
+            base_width: state.brush_width,
+            rot: 0.0,
+        };
+        let index = state.canvas.objects.len();
+        state
+            .history
+            .save_add_object(index, CanvasObject::Stroke(new_stroke.clone()));
+        state.canvas.objects.push(CanvasObject::Stroke(new_stroke));
     }
     state.is_drawing = !state.active_strokes.is_empty();
 }
@@ -2191,6 +2237,23 @@ impl ApplicationHandler<UserEvent> for App {
             .create_window(Window::default_attributes())
             .unwrap();
         pollster::block_on(self.set_window(window));
+        // Update UI reactively
+        self.window.as_ref().unwrap().request_redraw();
+    }
+
+    // Update UI reactively
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.state.should_quit {
+            return;
+        }
+
+        if let Some(render_state) = self.render_state.as_ref() {
+            if render_state.egui_renderer.context().has_requested_repaint() {
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+        }
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -2203,6 +2266,8 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(tray) = &self.state.tray {
                         let _ = tray.set_visible(false);
                     }
+                    // Update UI reactively
+                    window.request_redraw();
                 }
             }
         }
@@ -2216,16 +2281,33 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
 
-        // 让 egui 先处理事件
-        self.render_state
-            .as_mut()
-            .unwrap()
-            .egui_renderer
-            .handle_input(self.window.as_ref().unwrap(), &event);
+        // Update UI reactively
+        // Don't pass RedrawRequested to egui's input handler,
+        // it's not input and would make egui request a repaint, causing an infinite loop
+        if !self.state.persistent.force_redraw_every_frame {
+            if !matches!(event, WindowEvent::RedrawRequested) {
+                let egui_needs_repaint = self
+                    .render_state
+                    .as_mut()
+                    .unwrap()
+                    .egui_renderer
+                    .handle_input(self.window.as_ref().unwrap(), &event);
+
+                if egui_needs_repaint {
+                    self.window.as_ref().unwrap().request_redraw();
+                }
+            }
+        } else {
+            self.render_state
+                .as_mut()
+                .unwrap()
+                .egui_renderer
+                .handle_input(self.window.as_ref().unwrap(), &event);
+            self.window.as_ref().unwrap().request_redraw();
+        }
 
         match event {
             WindowEvent::CloseRequested => {
-                println!("window close was requested; exiting");
                 self.exit(event_loop);
             }
             WindowEvent::KeyboardInput {
@@ -2237,15 +2319,15 @@ impl ApplicationHandler<UserEvent> for App {
                     },
                 ..
             } => {
-                println!("escape key pressed; exiting");
                 self.exit(event_loop);
             }
             WindowEvent::RedrawRequested => {
                 self.handle_redraw();
-                self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::Resized(new_size) => {
                 self.handle_resized(new_size.width, new_size.height);
+                // Update UI reactively
+                self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::Touch(Touch {
                 phase,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::state::{FONT, OptimizationPolicy};
+use crate::state::OptimizationPolicy;
 
 pub struct RenderState {
     pub device: wgpu::Device,
@@ -31,15 +31,16 @@ impl RenderState {
     ) -> Self {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: match optimization_policy {
-                    OptimizationPolicy::Performance => wgpu::PowerPreference::HighPerformance,
-                    OptimizationPolicy::ResourceUsage => wgpu::PowerPreference::LowPower,
-                },
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             })
             .await
             .expect("failed to find an appropriate adapter");
+
+        let info = adapter.get_info();
+        println!("using gpu device: {}", info.name);
+        println!("using render backend: {}", info.backend);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -155,74 +156,28 @@ impl EguiRenderer {
     fn setup_fonts(ctx: &mut Context) {
         let mut fonts = FontDefinitions::default();
 
+        let font_bytes = crate::utils::font_bytes();
+        let font_name = "cjk_font";
         fonts.font_data.insert(
-            "notosans_cjk_sc".to_owned(),
-            Arc::new(egui::FontData::from_static(FONT)),
+            font_name.to_owned(),
+            Arc::new(egui::FontData::from_owned(font_bytes.to_vec())),
         );
 
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
             .or_default()
-            .insert(0, "notosans_cjk_sc".to_owned());
-
-        // let mut font_db = fontdb::Database::new();
-        // font_db.load_system_fonts();
-
-        // let cjk_font_names = [
-        //     "Noto Sans CJK SC",
-        //     "Noto Sans CJK",
-        //     "Microsoft YaHei",
-        //     "微软雅黑",
-        // ];
-
-        // let mut font_loaded = false;
-
-        // for font_name in &cjk_font_names {
-        //     if let Some(face_id) = font_db.query(&fontdb::Query {
-        //         families: &[fontdb::Family::Name(font_name)],
-        //         weight: fontdb::Weight::NORMAL,
-        //         stretch: fontdb::Stretch::Normal,
-        //         style: fontdb::Style::Normal,
-        //     }) {
-        //         if let Some(font_data) =
-        //             font_db.with_face_data(face_id, |data, _| Some(data.to_vec()))
-        //         {
-        //             if let Some(font_bytes) = font_data {
-        //                 fonts.font_data.insert(
-        //                     "cjk_font".to_owned(),
-        //                     Arc::new(FontData::from_owned(font_bytes)),
-        //                 );
-
-        //                 fonts
-        //                     .families
-        //                     .get_mut(&FontFamily::Proportional)
-        //                     .unwrap()
-        //                     .insert(0, "cjk_font".to_owned());
-
-        //                 fonts
-        //                     .families
-        //                     .get_mut(&FontFamily::Monospace)
-        //                     .unwrap()
-        //                     .insert(0, "cjk_font".to_owned());
-
-        //                 font_loaded = true;
-
-        //                 break;
-        //             }
-        //         }
-        //     }
-        // }
-
-        // if !font_loaded {
-        //     panic!("cannot find cjk font")
-        // }
+            .insert(0, font_name.to_owned());
 
         ctx.set_fonts(fonts);
     }
 
-    pub fn handle_input(&mut self, window: &Window, event: &WindowEvent) {
-        let _ = self.state.on_window_event(window, event);
+    // pub fn handle_input(&mut self, window: &Window, event: &WindowEvent) {
+    //     let _ = self.state.on_window_event(window, event);
+    // }
+    // Update UI reactively
+    pub fn handle_input(&mut self, window: &Window, event: &WindowEvent) -> bool {
+        self.state.on_window_event(window, event).repaint
     }
 
     pub fn ppp(&mut self, v: f32) {

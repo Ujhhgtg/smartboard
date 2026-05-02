@@ -13,6 +13,12 @@ cargo build            # debug
 cargo build --release  # release
 ```
 
+## Lint
+
+```bash
+cargo clippy --release
+```
+
 ## Architecture
 
 - GUI app using **egui + wgpu + winit**

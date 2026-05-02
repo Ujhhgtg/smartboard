@@ -4,6 +4,7 @@ mod app;
 mod render;
 mod state;
 mod utils;
+
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
 mod windows_utils;
@@ -25,6 +26,17 @@ fn main() {
             .show();
     }));
 
+    println!(
+        r"
+                              __  __                         __
+   _________ ___  ____ ______/ /_/ /_  ____  ____ __________/ /
+  / ___/ __ `__ \/ __ `/ ___/ __/ __ \/ __ \/ __ `/ ___/ __  / 
+ (__  ) / / / / / /_/ / /  / /_/ /_/ / /_/ / /_/ / /  / /_/ /  
+/____/_/ /_/ /_/\__,_/_/   \__/_.___/\____/\__,_/_/   \__,_/   
+                                                               
+    "
+    );
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         pollster::block_on(run());
@@ -41,7 +53,9 @@ async fn run() {
     tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
         let _ = proxy.send_event(UserEvent::TrayIconEvent(event));
     }));
-    event_loop.set_control_flow(ControlFlow::Poll);
+    // event_loop.set_control_flow(ControlFlow::Poll);
+    // Update UI reactively
+    event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = app::App::new();
     event_loop.run_app(&mut app).expect("failed to run app");
 }

@@ -1,20 +1,29 @@
 use egui::Color32;
 use egui::Pos2;
 use egui::Stroke;
-use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use egui_notify::Toasts;
-use rodio::Decoder;
-use rodio::DeviceSinkBuilder;
-use rodio::Player;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use std::io::Cursor;
 use std::time::Instant;
 use tray_icon::TrayIcon;
 use wgpu::PresentMode;
 
+#[cfg(feature = "startup_animation")]
+use egui::{ColorImage, Context, TextureHandle, TextureOptions};
+#[cfg(feature = "startup_animation")]
+use rodio::Decoder;
+#[cfg(feature = "startup_animation")]
+use rodio::DeviceSinkBuilder;
+#[cfg(feature = "startup_animation")]
+use rodio::Player;
+#[cfg(feature = "startup_animation")]
+use std::io::Cursor;
+
 use crate::utils;
+
+pub mod flat;
+use flat::CanvasStateFlat;
 
 /// Dynamic brush width mode for stroke rendering
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -23,6 +32,81 @@ pub enum DynamicBrushWidthMode {
     Disabled, // No dynamic width adjustment
     BrushTip,   // Simulates brush tip pressure for calligraphy effect
     SpeedBased, // Adjusts width based on drawing speed
+}
+
+/// Stroke width representation
+#[derive(Debug, Clone)]
+pub enum StrokeWidth {
+    Fixed(f32),
+    Dynamic(Vec<f32>),
+}
+
+impl StrokeWidth {
+    pub fn get(&self, index: usize) -> f32 {
+        match self {
+            StrokeWidth::Fixed(w) => *w,
+            StrokeWidth::Dynamic(v) => v[index],
+        }
+    }
+
+    pub fn first(&self) -> f32 {
+        match self {
+            StrokeWidth::Fixed(w) => *w,
+            StrokeWidth::Dynamic(v) => v[0],
+        }
+    }
+
+    pub fn last(&self) -> f32 {
+        match self {
+            StrokeWidth::Fixed(w) => *w,
+            StrokeWidth::Dynamic(v) => *v.last().unwrap(),
+        }
+    }
+
+    pub fn max_width(&self) -> f32 {
+        match self {
+            StrokeWidth::Fixed(w) => *w,
+            StrokeWidth::Dynamic(v) => v.iter().copied().fold(0.0, f32::max),
+        }
+    }
+
+    pub fn push(&mut self, width: f32) {
+        match self {
+            StrokeWidth::Fixed(w) => {
+                if (*w - width).abs() >= 0.01 {
+                    *self = StrokeWidth::Dynamic(vec![*w, width]);
+                }
+            }
+            StrokeWidth::Dynamic(v) => v.push(width),
+        }
+    }
+
+    pub fn len(&self) -> Option<usize> {
+        match self {
+            StrokeWidth::Fixed(_) => None,
+            StrokeWidth::Dynamic(v) => Some(v.len()),
+        }
+    }
+}
+
+impl From<f32> for StrokeWidth {
+    fn from(width: f32) -> Self {
+        StrokeWidth::Fixed(width)
+    }
+}
+
+impl From<Vec<f32>> for StrokeWidth {
+    fn from(widths: Vec<f32>) -> Self {
+        if widths.is_empty() {
+            return StrokeWidth::Fixed(0.0);
+        }
+        let first = widths[0];
+        if widths.iter().all(|w| (w - first).abs() < 0.01) {
+            StrokeWidth::Fixed(first)
+        } else {
+            StrokeWidth::Dynamic(widths)
+        }
+    }
 }
 
 /// Transform handle types for object manipulation (resize and rotate)
@@ -194,7 +278,7 @@ impl fmt::Debug for CanvasImage {
 }
 
 /// Text object that can be placed on the canvas
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CanvasText {
     pub text: String,
     pub pos: Pos2,
@@ -273,7 +357,7 @@ impl CanvasObjectOps for CanvasText {
 }
 
 /// Available shape types for the canvas
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub enum CanvasShapeType {
     Line,
     Arrow,
@@ -283,7 +367,7 @@ pub enum CanvasShapeType {
 }
 
 /// Shape object that can be placed on the canvas
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CanvasShape {
     pub shape_type: CanvasShapeType,
     pub pos: Pos2,
@@ -429,10 +513,9 @@ impl CanvasObjectOps for CanvasShape {
 }
 
 /// Enum representing all possible canvas object types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum CanvasObject {
     Stroke(CanvasStroke),
-    #[serde(skip)]
     Image(CanvasImage),
     Text(CanvasText),
     Shape(CanvasShape),
@@ -554,53 +637,47 @@ pub enum OptimizationPolicy {
 }
 
 /// Represents the current state of the canvas including all objects
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct CanvasState {
     pub objects: Vec<CanvasObject>,
 }
 
 /// State for a single page including canvas and undo/redo history
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PageState {
     pub canvas: CanvasState,
     pub history: History,
 }
 
-impl Default for PageState {
-    fn default() -> Self {
-        Self {
-            canvas: CanvasState::default(),
-            history: History::new(50),
-        }
-    }
-}
-
 impl CanvasState {
-    /// Loads canvas state from a JSON file
+    /// Loads canvas state from a file using rkyv binary format
     pub fn load_from_file(path: &std::path::PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = std::fs::read_to_string(path)?;
-        let canvas = serde_json::from_str(&content)?;
-        Ok(canvas)
+        let bytes = std::fs::read(path)?;
+        let archived = rkyv::access::<flat::ArchivedCanvasStateFlat, rkyv::rancor::Error>(&bytes)
+            .map_err(|e| format!("rkyv error: {e}"))?;
+        Ok(Self::from(archived))
     }
 
-    /// Saves canvas state to a JSON file
+    /// Saves canvas state to a file using rkyv binary format
     pub fn save_to_file(
         &self,
         path: &std::path::PathBuf,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let content = serde_json::to_string(self)?;
-        std::fs::write(path, content)?;
+        let flat = CanvasStateFlat::from(self);
+        let bytes =
+            rkyv::to_bytes::<rkyv::rancor::Error>(&flat).map_err(|e| format!("rkyv error: {e}"))?;
+        std::fs::write(path, bytes.as_slice())?;
         Ok(())
     }
 
     /// Opens a file dialog to load canvas from user-selected file
     pub fn load_from_file_with_dialog() -> Result<Self, Box<dyn std::error::Error>> {
         let path = rfd::FileDialog::new()
-            .add_filter("画布文件", &["json"])
+            .add_filter("画布文件", &["sb"])
             .pick_file()
             .ok_or(std::io::Error::new(
                 std::io::ErrorKind::InvalidFilename,
-                "Cancelled",
+                "已取消",
             ))?;
         let canvas = CanvasState::load_from_file(&path)?;
         Ok(canvas)
@@ -609,12 +686,12 @@ impl CanvasState {
     /// Opens a file dialog to save canvas to user-selected file
     pub fn save_to_file_with_dialog(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = rfd::FileDialog::new()
-            .add_filter("画布文件", &["json"])
-            .set_file_name("canvas.json")
+            .add_filter("画布文件", &["sb"])
+            .set_file_name("canvas.sb")
             .save_file()
             .ok_or(std::io::Error::new(
                 std::io::ErrorKind::InvalidFilename,
-                "Cancelled",
+                "已取消",
             ))?;
 
         self.save_to_file(&path)?;
@@ -653,6 +730,8 @@ pub struct PersistentState {
     pub optimization_policy: OptimizationPolicy,
     #[serde(default)]
     pub low_latency_mode: bool,
+    #[serde(default)]
+    pub force_redraw_every_frame: bool,
 
     #[serde(default)]
     pub keep_insertion_window_open: bool,
@@ -684,6 +763,7 @@ impl Default for PersistentState {
             present_mode: PresentMode::AutoVsync,
             optimization_policy: OptimizationPolicy::default(),
             low_latency_mode: false,
+            force_redraw_every_frame: false,
 
             keep_insertion_window_open: true,
 
@@ -726,10 +806,10 @@ impl PersistentState {
 }
 
 // 绘图数据结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CanvasStroke {
     pub points: Vec<Pos2>,
-    pub widths: Vec<f32>, // 每个点的宽度（用于动态画笔）
+    pub width: StrokeWidth,
     pub color: Color32,
     pub base_width: f32,
     pub rot: f32,
@@ -744,8 +824,13 @@ impl CanvasStroke {
         }
         // Scale widths proportionally
         let avg_scale = (scale_x + scale_y) / 2.0;
-        for width in &mut stroke.widths {
-            *width *= avg_scale;
+        match &mut stroke.width {
+            StrokeWidth::Fixed(w) => *w *= avg_scale,
+            StrokeWidth::Dynamic(v) => {
+                for width in v.iter_mut() {
+                    *width *= avg_scale;
+                }
+            }
         }
     }
 
@@ -857,7 +942,7 @@ impl CanvasObjectOps for CanvasStroke {
         }
 
         // 考虑笔画宽度，添加一些边距
-        let max_width = self.widths.iter().copied().fold(0.0, f32::max);
+        let max_width = self.width.max_width();
         let padding = max_width / 2.0 + 5.0; // 添加额外的5像素边距
 
         egui::Rect::from_min_max(
@@ -889,41 +974,38 @@ impl CanvasObjectOps for CanvasStroke {
             self.points.clone()
         };
 
-        // 如果所有宽度相同，使用简单路径
-        let all_same_width = self.widths.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01);
-
         painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
             rotated_points[0],
-            self.widths[0] / 2.0,
+            self.width.first() / 2.0,
             color,
         )));
         if rotated_points.len() >= 2 {
             painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
                 rotated_points[rotated_points.len() - 1],
-                self.widths[rotated_points.len() - 1] / 2.0,
+                self.width.last() / 2.0,
                 color,
             )));
-            if all_same_width && rotated_points.len() == 2 {
-                // 只有两个点且宽度相同，直接画线段
-                painter.line_segment(
-                    [rotated_points[0], rotated_points[1]],
-                    Stroke::new(self.widths[0], color),
-                );
-            } else if all_same_width {
-                // 多个点但宽度相同，使用路径
-                let path = egui::epaint::PathShape::line(
-                    rotated_points,
-                    Stroke::new(self.widths[0], color),
-                );
-                painter.add(egui::Shape::Path(path));
-            } else {
-                // 宽度不同，分段绘制
-                for i in 0..rotated_points.len() - 1 {
-                    let avg_width = (self.widths[i] + self.widths[i + 1]) / 2.0;
-                    painter.line_segment(
-                        [rotated_points[i], rotated_points[i + 1]],
-                        Stroke::new(avg_width, color),
-                    );
+            match &self.width {
+                StrokeWidth::Fixed(w) => {
+                    if rotated_points.len() == 2 {
+                        painter.line_segment(
+                            [rotated_points[0], rotated_points[1]],
+                            Stroke::new(*w, color),
+                        );
+                    } else {
+                        let path =
+                            egui::epaint::PathShape::line(rotated_points, Stroke::new(*w, color));
+                        painter.add(egui::Shape::Path(path));
+                    }
+                }
+                StrokeWidth::Dynamic(widths) => {
+                    for i in 0..rotated_points.len() - 1 {
+                        let avg_width = (widths[i] + widths[i + 1]) / 2.0;
+                        painter.line_segment(
+                            [rotated_points[i], rotated_points[i + 1]],
+                            Stroke::new(avg_width, color),
+                        );
+                    }
                 }
             }
         }
@@ -976,12 +1058,13 @@ impl FpsCounter {
 // 单个正在绘制的笔画数据
 pub struct ActiveStroke {
     pub points: Vec<Pos2>,
-    pub widths: Vec<f32>,            // 每个点的宽度（用于动态画笔）
+    pub width: StrokeWidth,
     pub times: Vec<f64>,             // 每个点的时间戳（用于速度计算）
     pub start_time: Instant,         // 笔画开始时间
     pub last_movement_time: Instant, // 最后一次移动的时间（用于检测停留）
 }
 
+#[cfg(feature = "startup_animation")]
 pub struct StartupAnimation {
     fps: f32,
     start_time: Option<Instant>,
@@ -997,6 +1080,7 @@ pub struct StartupAnimation {
     finished: bool,
 }
 
+#[cfg(feature = "startup_animation")]
 impl StartupAnimation {
     pub fn new(fps: f32, frames: &'static [&'static [u8]], audio: &'static [u8]) -> Self {
         Self {
@@ -1323,12 +1407,19 @@ impl History {
     }
 }
 
+impl Default for History {
+    fn default() -> Self {
+        Self::new(50)
+    }
+}
+
 // 应用程序状态
 pub struct AppState {
-    pub canvas: CanvasState,                             // 当前页面的画布
-    pub history: History,                                // 当前页面的历史记录
-    pub pages: Vec<PageState>,                           // 分页
-    pub current_page: usize,                             // 当前页码
+    // canvas states
+    pub canvas: CanvasState,                              // 当前页面的画布
+    pub history: History,                                 // 当前页面的历史记录
+    pub pages: Vec<PageState>,                            // 分页
+    pub current_page: usize,                              // 当前页码
     pub active_strokes: HashMap<u64, ActiveStroke>, // 多点触控笔画，存储触控 ID 到正在绘制的笔画
     pub is_drawing: bool,                           // 是否正在绘制
     pub brush_color: Color32,                       // 画笔颜色
@@ -1340,25 +1431,36 @@ pub struct AppState {
     pub drag_start_pos: Option<Pos2>,               // 拖拽开始位置
     pub dragged_handle: Option<TransformHandle>,    // 正在拖拽的调整句柄
     pub drag_move_accumulated_delta: egui::Vec2,    // 移动拖拽累计位移
+    pub drag_original_transform: Option<ObjectTransform>, // 拖拽开始时的原始变换（用于 resize 历史记录）
+    pub touch_points: HashMap<u64, Pos2>,                 // 多点触控点，存储触控 ID 到位置的映射
+
+    // persistent states
+    pub persistent: PersistentState,
+
+    // ui states
     pub show_size_preview: bool,
     pub show_insert_text_dialog: bool,
     pub new_text_content: String,
     pub show_insert_shape_dialog: bool,
-    pub fps_counter: FpsCounter, // FPS 计数器
     pub should_quit: bool,
-    pub touch_points: HashMap<u64, Pos2>, // 多点触控点，存储触控 ID 到位置的映射
-    pub window_mode_changed: bool,        // 窗口模式是否已更改
+    pub show_welcome_window: bool,
     pub available_video_modes: Vec<winit::monitor::VideoModeHandle>,
     pub selected_video_mode_index: Option<usize>, // 选中的视频模式索引
+    pub fps_counter: FpsCounter,                  // FPS 计数器
     pub show_quick_color_editor: bool,            // 是否显示快捷颜色编辑器
     pub new_quick_color: Color32,                 // 新快捷颜色，用于添加
     pub show_touch_points: bool,                  // 是否显示触控点，用于调试
-    pub present_mode_changed: bool,               // 垂直同步模式是否已更改
+
+    // reactive states
+    pub window_mode_changed: bool,  // 窗口模式是否已更改
+    pub present_mode_changed: bool, // 垂直同步模式是否已更改
+
     #[cfg(target_os = "windows")]
     pub show_console: bool, // 是否显示控制台 [仅 Windows]
+    #[cfg(feature = "startup_animation")]
     pub startup_animation: Option<StartupAnimation>, // 启动动画
-    pub show_welcome_window: bool,
-    pub persistent: PersistentState,
+
+    // utils
     pub toasts: Toasts,
     pub tray: Option<TrayIcon>,
 }
@@ -1381,6 +1483,7 @@ impl Default for AppState {
             drag_start_pos: None,
             dragged_handle: None,
             drag_move_accumulated_delta: egui::Vec2::ZERO,
+            drag_original_transform: None,
             show_size_preview: false,
             fps_counter: FpsCounter::new(),
             should_quit: false,
@@ -1395,19 +1498,19 @@ impl Default for AppState {
             new_quick_color: Color32::WHITE,
             show_touch_points: false,
             present_mode_changed: false,
-            #[cfg(target_os = "windows")]
-            show_console: false,
-            startup_animation: None,
             show_welcome_window: true,
             persistent: PersistentState::load_from_file(),
             toasts: Toasts::default()
                 .with_anchor(egui_notify::Anchor::BottomRight)
                 .with_margin(egui::vec2(20.0, 20.0)),
-            history: History::new(50), // 历史记录，最大保存50个状态
+            history: History::default(),
             tray: None,
+            #[cfg(target_os = "windows")]
+            show_console: false,
+            #[cfg(feature = "startup_animation")]
+            startup_animation: None,
         }
     }
 }
 
-pub const FONT: &[u8] = include_bytes!("../assets/fonts/NotoSansCJKsc-Regular.otf");
 pub const ICON: &[u8] = include_bytes!("../assets/images/app_icon/icon.ico");

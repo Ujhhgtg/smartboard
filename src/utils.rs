@@ -1,8 +1,13 @@
+use std::sync::OnceLock;
+
 use egui::{Color32, Painter, Pos2, Stroke};
 use image::{DynamicImage, GenericImageView};
 use ttf_parser::{Face, OutlineBuilder};
 
 use crate::state::CanvasStroke;
+use crate::state::DynamicBrushWidthMode;
+use crate::state::StrokeWidth;
+use crate::state::TransformHandle;
 
 // 检查点是否与笔画相交（用于对象橡皮擦）
 pub fn point_intersects_stroke(pos: Pos2, stroke: &CanvasStroke, eraser_size: f32) -> bool {
@@ -10,17 +15,9 @@ pub fn point_intersects_stroke(pos: Pos2, stroke: &CanvasStroke, eraser_size: f3
     for i in 0..stroke.points.len() - 1 {
         let p1 = stroke.points[i];
         let p2 = stroke.points[i + 1];
-        let stroke_width = if i < stroke.widths.len() {
-            stroke.widths[i].max(
-                stroke
-                    .widths
-                    .get(i + 1)
-                    .copied()
-                    .unwrap_or(stroke.widths[i]),
-            )
-        } else {
-            stroke.widths[0]
-        };
+        let w1 = stroke.width.get(i);
+        let w2 = stroke.width.get(i + 1);
+        let stroke_width = w1.max(w2);
 
         // 计算点到线段的距离
         let dist = point_to_line_segment_distance(pos, p1, p2);
@@ -50,15 +47,15 @@ pub fn point_to_line_segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 // 计算动态画笔宽度
 pub fn calculate_dynamic_width(
     base_width: f32,
-    mode: crate::state::DynamicBrushWidthMode,
+    mode: DynamicBrushWidthMode,
     point_index: usize,
     total_points: usize,
     speed: Option<f32>,
-) -> f32 {
-    match mode {
-        crate::state::DynamicBrushWidthMode::Disabled => base_width,
+) -> StrokeWidth {
+    let width = match mode {
+        DynamicBrushWidthMode::Disabled => return StrokeWidth::Fixed(base_width),
 
-        crate::state::DynamicBrushWidthMode::BrushTip => {
+        DynamicBrushWidthMode::BrushTip => {
             // 模拟笔锋：在笔画末尾逐渐缩小
             let progress = point_index as f32 / total_points.max(1) as f32;
             // 在最后 30% 的笔画中逐渐缩小到 40% 的宽度
@@ -70,7 +67,7 @@ pub fn calculate_dynamic_width(
             }
         }
 
-        crate::state::DynamicBrushWidthMode::SpeedBased => {
+        DynamicBrushWidthMode::SpeedBased => {
             // 基于速度：速度快时变细，速度慢时变粗
             if let Some(speed_val) = speed {
                 // 速度范围假设：0-500 像素/秒
@@ -82,66 +79,88 @@ pub fn calculate_dynamic_width(
                 base_width
             }
         }
-    }
+    };
+    StrokeWidth::Dynamic(vec![width])
 }
 
 // 插值算法 - 在点之间插入中间点
-pub fn apply_point_interpolation(
-    points: &[Pos2],
-    widths: &[f32],
+pub fn apply_point_interpolation_in_place(
+    points: &mut Vec<Pos2>,
+    width: &StrokeWidth,
     frequency: f32,
-) -> (Vec<Pos2>, Vec<f32>) {
+) -> StrokeWidth {
     if points.len() < 2 || frequency <= 0.0 {
-        return (points.to_vec(), widths.to_vec());
+        return width.clone();
     }
 
-    let mut interpolated_points = Vec::new();
-    let mut interpolated_widths = Vec::new();
+    match width {
+        StrokeWidth::Fixed(w) => {
+            let mut interpolated = Vec::new();
 
-    for i in 0..points.len() - 1 {
-        let p1 = points[i];
-        let p2 = points[i + 1];
-        let width1 = if i < widths.len() {
-            widths[i]
-        } else {
-            widths[0]
-        };
-        let width2 = if i + 1 < widths.len() {
-            widths[i + 1]
-        } else {
-            widths[widths.len() - 1]
-        };
+            for i in 0..points.len() - 1 {
+                let p1 = points[i];
+                let p2 = points[i + 1];
+                interpolated.push(p1);
 
-        // 添加第一个点
-        interpolated_points.push(p1);
-        interpolated_widths.push(width1);
+                let distance = p1.distance(p2);
+                let num_interpolations = (distance * frequency) as usize;
 
-        // 计算插值点数量
-        let distance = p1.distance(p2);
-        let num_interpolations = (distance * frequency) as usize;
+                for j in 1..=num_interpolations {
+                    let t = j as f32 / (num_interpolations + 1) as f32;
+                    interpolated.push(Pos2::new(
+                        p1.x + t * (p2.x - p1.x),
+                        p1.y + t * (p2.y - p1.y),
+                    ));
+                }
+            }
 
-        // 在两点之间插入中间点
-        for j in 1..=num_interpolations {
-            let t = j as f32 / (num_interpolations + 1) as f32;
-            let interpolated_point = Pos2::new(p1.x + t * (p2.x - p1.x), p1.y + t * (p2.y - p1.y));
-            let interpolated_width = width1 + t * (width2 - width1);
+            if let Some(&last_point) = points.last() {
+                interpolated.push(last_point);
+            }
 
-            interpolated_points.push(interpolated_point);
-            interpolated_widths.push(interpolated_width);
+            *points = interpolated;
+            StrokeWidth::Fixed(*w)
+        }
+        StrokeWidth::Dynamic(widths) => {
+            let mut interpolated_points = Vec::new();
+            let mut interpolated_widths = Vec::new();
+
+            for i in 0..points.len() - 1 {
+                let p1 = points[i];
+                let p2 = points[i + 1];
+                let width1 = widths[i.min(widths.len().saturating_sub(1))];
+                let width2 = widths[(i + 1).min(widths.len().saturating_sub(1))];
+
+                interpolated_points.push(p1);
+                interpolated_widths.push(width1);
+
+                let distance = p1.distance(p2);
+                let num_interpolations = (distance * frequency) as usize;
+
+                for j in 1..=num_interpolations {
+                    let t = j as f32 / (num_interpolations + 1) as f32;
+                    interpolated_points.push(Pos2::new(
+                        p1.x + t * (p2.x - p1.x),
+                        p1.y + t * (p2.y - p1.y),
+                    ));
+                    interpolated_widths.push(width1 + t * (width2 - width1));
+                }
+            }
+
+            if let Some(&last_point) = points.last() {
+                interpolated_points.push(last_point);
+            }
+            if let Some(&last_width) = widths.last() {
+                interpolated_widths.push(last_width);
+            }
+
+            *points = interpolated_points;
+            interpolated_widths.into()
         }
     }
-
-    // 添加最后一个点
-    if let Some(last_point) = points.last() {
-        interpolated_points.push(*last_point);
-    }
-    if let Some(last_width) = widths.last() {
-        interpolated_widths.push(*last_width);
-    }
-
-    (interpolated_points, interpolated_widths)
 }
 
+#[must_use]
 pub fn apply_stroke_smoothing(points: &[Pos2]) -> Vec<Pos2> {
     if points.len() < 3 {
         return points.to_vec();
@@ -431,31 +450,22 @@ pub fn draw_resize_handles(painter: &egui::Painter, bbox: egui::Rect) {
 
     // 8个调整大小的句柄
     let handles = [
-        (bbox.left_top(), crate::state::TransformHandle::TopLeft),
-        (bbox.right_top(), crate::state::TransformHandle::TopRight),
-        (
-            bbox.left_bottom(),
-            crate::state::TransformHandle::BottomLeft,
-        ),
-        (
-            bbox.right_bottom(),
-            crate::state::TransformHandle::BottomRight,
-        ),
-        (
-            Pos2::new(bbox.center().x, bbox.top()),
-            crate::state::TransformHandle::Top,
-        ),
+        (bbox.left_top(), TransformHandle::TopLeft),
+        (bbox.right_top(), TransformHandle::TopRight),
+        (bbox.left_bottom(), TransformHandle::BottomLeft),
+        (bbox.right_bottom(), TransformHandle::BottomRight),
+        (Pos2::new(bbox.center().x, bbox.top()), TransformHandle::Top),
         (
             Pos2::new(bbox.center().x, bbox.bottom()),
-            crate::state::TransformHandle::Bottom,
+            TransformHandle::Bottom,
         ),
         (
             Pos2::new(bbox.left(), bbox.center().y),
-            crate::state::TransformHandle::Left,
+            TransformHandle::Left,
         ),
         (
             Pos2::new(bbox.right(), bbox.center().y),
-            crate::state::TransformHandle::Right,
+            TransformHandle::Right,
         ),
     ];
 
@@ -478,40 +488,28 @@ pub fn draw_resize_handles(painter: &egui::Painter, bbox: egui::Rect) {
 }
 
 // 获取鼠标位置下的调整句柄
-pub fn get_transform_handle_at_pos(
-    bbox: egui::Rect,
-    pos: Pos2,
-) -> Option<crate::state::TransformHandle> {
+pub fn get_transform_handle_at_pos(bbox: egui::Rect, pos: Pos2) -> Option<TransformHandle> {
     let handle_size = 20.0;
     let handle_hit_size = handle_size * 1.5; // 扩大点击区域
 
     // 检查 8 个调整大小的句柄
     let handles = [
-        (bbox.left_top(), crate::state::TransformHandle::TopLeft),
-        (bbox.right_top(), crate::state::TransformHandle::TopRight),
-        (
-            bbox.left_bottom(),
-            crate::state::TransformHandle::BottomLeft,
-        ),
-        (
-            bbox.right_bottom(),
-            crate::state::TransformHandle::BottomRight,
-        ),
-        (
-            Pos2::new(bbox.center().x, bbox.top()),
-            crate::state::TransformHandle::Top,
-        ),
+        (bbox.left_top(), TransformHandle::TopLeft),
+        (bbox.right_top(), TransformHandle::TopRight),
+        (bbox.left_bottom(), TransformHandle::BottomLeft),
+        (bbox.right_bottom(), TransformHandle::BottomRight),
+        (Pos2::new(bbox.center().x, bbox.top()), TransformHandle::Top),
         (
             Pos2::new(bbox.center().x, bbox.bottom()),
-            crate::state::TransformHandle::Bottom,
+            TransformHandle::Bottom,
         ),
         (
             Pos2::new(bbox.left(), bbox.center().y),
-            crate::state::TransformHandle::Left,
+            TransformHandle::Left,
         ),
         (
             Pos2::new(bbox.right(), bbox.center().y),
-            crate::state::TransformHandle::Right,
+            TransformHandle::Right,
         ),
     ];
 
@@ -528,7 +526,7 @@ pub fn get_transform_handle_at_pos(
     let rotate_rect =
         egui::Rect::from_center_size(rotate_pos, egui::vec2(handle_hit_size, handle_hit_size));
     if rotate_rect.contains(pos) {
-        return Some(crate::state::TransformHandle::Rotate);
+        return Some(TransformHandle::Rotate);
     }
 
     None
@@ -573,10 +571,9 @@ pub fn rasterize_text(
             face.outline_glyph(glyph_id, &mut builder);
 
             for points in builder.strokes {
-                let len = points.len();
-                strokes.push(crate::state::CanvasStroke {
+                strokes.push(CanvasStroke {
                     points,
-                    widths: vec![1.0; len],
+                    width: StrokeWidth::Fixed(1.0),
                     color: text.color,
                     base_width: text.font_size,
                     rot: 0.0,
@@ -651,6 +648,50 @@ impl OutlineBuilder for StrokeBuilder {
     }
 }
 
-// pub fn exp_ease(a: f32, t: f32) -> f32 {
-//     (a.powf(t) - 1.0) / (a - 1.0)
-// }
+#[cfg(feature = "embedded_font")]
+pub const EMBEDDED_FONT: &[u8] = include_bytes!("../assets/fonts/noto-sans-cjk-sc-regular.otf");
+
+pub fn font_bytes() -> &'static [u8] {
+    static FONT: OnceLock<Vec<u8>> = OnceLock::new();
+
+    FONT.get_or_init(|| {
+        #[cfg(feature = "embedded_font")]
+        {
+            EMBEDDED_FONT.to_vec()
+        }
+
+        #[cfg(feature = "system_font")]
+        {
+            let mut font_db = fontdb::Database::new();
+            font_db.load_system_fonts();
+
+            let cjk_font_names = [
+                "Noto Sans CJK SC",
+                "Noto Sans CJK",
+                "Microsoft YaHei",
+                "微软雅黑",
+            ];
+
+            for font_name in &cjk_font_names {
+                if let Some(face_id) = font_db.query(&fontdb::Query {
+                    families: &[fontdb::Family::Name(font_name)],
+                    weight: fontdb::Weight::NORMAL,
+                    stretch: fontdb::Stretch::Normal,
+                    style: fontdb::Style::Normal,
+                }) {
+                    if let Some(font_data) =
+                        font_db.with_face_data(face_id, |data, _| Some(data.to_vec()))
+                        && let Some(font_bytes) = font_data
+                    {
+                        return font_bytes;
+                    }
+                }
+            }
+
+            panic!("cannot find cjk font")
+        }
+    })
+}
+
+#[cfg(all(feature = "embedded_font", feature = "system_font"))]
+compile_error!("Features 'embedded_font' and 'system_fonts' cannot be enabled together");
