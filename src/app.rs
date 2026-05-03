@@ -5,16 +5,15 @@ use crate::state::StartupAnimation;
 use crate::state::{
     AppState, CanvasObject, CanvasObjectOps, CanvasTool, PointerInteraction, PointerState,
 };
+use crate::ui;
 use crate::utils;
 use crate::utils::stroke::{brush_stroke_add_point, brush_stroke_end, brush_stroke_start};
 use crate::utils::ui::{apply_theme_mode_and_canvas_color, apply_window_mode};
-use crate::{UserEvent, ui};
 use core::f32;
 use egui::{Pos2, Vec2};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
-use tray_icon::TrayIconBuilder;
 use wgpu::TexelCopyTextureInfo;
 use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
 use winit::application::ApplicationHandler;
@@ -100,15 +99,6 @@ error: failed to get monitor
         // 设置窗口模式
         apply_window_mode(&mut self.state, &window);
 
-        // 创建托盘图标
-        let tray = TrayIconBuilder::new()
-            .with_icon(tray_icon::Icon::from_rgba(rgba, width, height).expect("invalid icon data"))
-            .with_tooltip("uwu")
-            .build()
-            .unwrap();
-        let _ = tray.set_visible(false);
-        self.state.tray = Some(tray);
-
         // 获取窗口尺寸
         let size = window.inner_size();
         let initial_width = size.width;
@@ -149,17 +139,14 @@ error: failed to get monitor
         if let Err(err) = self.state.persistent.save_to_file() {
             eprintln!("failed to save settings: {}", err);
         }
-        self.state.tray.take(); // closes tray
         event_loop.exit();
     }
 
     fn handle_resized(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            self.render_state
-                .as_mut()
-                .unwrap()
-                .resize_surface(width, height);
-        }
+        self.render_state
+            .as_mut()
+            .unwrap()
+            .resize_surface(width, height);
     }
 
     fn handle_redraw(&mut self) {
@@ -178,20 +165,12 @@ error: failed to get monitor
 
         let surface_texture = match surface_texture {
             CurrentSurfaceTexture::Success(surface) => surface,
-            CurrentSurfaceTexture::Lost => {
-                println!("wgpu surface lost");
-                return;
-            }
-            CurrentSurfaceTexture::Outdated => {
-                println!("wgpu surface outdated");
-                return;
-            }
-            CurrentSurfaceTexture::Timeout => {
-                println!("wgpu surface timeout");
-                return;
+            CurrentSurfaceTexture::Suboptimal(surface) => {
+                println!("warning: wgpu surface suboptimal");
+                surface
             }
             val => {
-                println!("{:?}", val);
+                println!("warning: wgpu surface {:?}", val);
                 return;
             }
         };
@@ -208,6 +187,8 @@ error: failed to get monitor
 
         render_state.egui_renderer.begin_frame(window);
 
+        // --- ui ---
+
         let ctx = &(render_state.egui_renderer.context().clone());
 
         #[cfg(feature = "startup_animation")]
@@ -223,8 +204,6 @@ error: failed to get monitor
 
         // access this value in next redraw before ui to ensure that all ui has become invisible
         let screenshot_path = self.state.screenshot_path.clone();
-
-        // --- ui ---
 
         if self.state.show_welcome_window {
             ui::ui_welcome(&mut self.state, ctx);
@@ -329,9 +308,9 @@ error: failed to get monitor
             //     .copied()
             //     .collect::<Vec<u8>>();
 
-            for chunk in pixels.chunks_exact_mut(4) {
-                chunk.swap(0, 2); // B ↔ R
-            }
+            // for chunk in pixels.chunks_exact_mut(4) {
+            //     chunk.swap(0, 2); // B ↔ R
+            // }
 
             match image::save_buffer(path, &pixels, width, height, image::ColorType::Rgba8) {
                 Ok(_) => {
@@ -350,8 +329,6 @@ error: failed to get monitor
             render_state.queue.submit(Some(encoder.finish()));
         }
 
-        surface_texture.present();
-
         self.state.canvas.objects.retain(|obj| {
             if let CanvasObject::Image(img) = obj {
                 !img.marked_for_deletion
@@ -359,6 +336,8 @@ error: failed to get monitor
                 true
             }
         });
+
+        surface_texture.present();
 
         if self.state.present_mode_changed {
             render_state.set_present_mode(self.state.persistent.present_mode);
@@ -371,7 +350,7 @@ error: failed to get monitor
     }
 }
 
-impl ApplicationHandler<UserEvent> for App {
+impl ApplicationHandler<()> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -394,25 +373,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
-        match event {
-            UserEvent::TrayIconEvent(event) => {
-                if let tray_icon::TrayIconEvent::Click { .. } = event {
-                    let window = self.window.as_ref().unwrap();
-                    window.set_visible(true);
-                    window.focus_window();
-                    if let Some(tray) = &self.state.tray {
-                        let _ = tray.set_visible(false);
-                    }
-                    // redraw on tray click
-                    window.request_redraw();
-                }
-            }
-        }
-    }
-
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        // 检查是否需要退出
         if self.state.should_quit {
             println!("quit button was pressed; exiting");
             self.exit(event_loop);
@@ -456,9 +417,18 @@ impl ApplicationHandler<UserEvent> for App {
                 self.handle_redraw();
             }
             WindowEvent::Resized(new_size) => {
-                self.handle_resized(new_size.width, new_size.height);
-                // Update UI reactively
-                self.window.as_ref().unwrap().request_redraw();
+                // TODO: issue #1 is caused by get_current_texture() lagging after surface reconfigure
+                //       although we haven't fix that, we avoid the reconfigure on minimize/resume to prevent that bug from occurring
+                //       when that actual cause is fixed, we can probably remove this guard
+                let surface_config = &self.render_state.as_ref().unwrap().surface_config;
+                if (new_size.width != surface_config.width
+                    || new_size.height != surface_config.height)
+                    && new_size.width > 0
+                    && new_size.height > 0
+                {
+                    self.handle_resized(new_size.width, new_size.height);
+                    self.window.as_ref().unwrap().request_redraw();
+                }
             }
             WindowEvent::Touch(Touch {
                 phase,

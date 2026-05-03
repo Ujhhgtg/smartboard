@@ -36,24 +36,16 @@ fn main() {
     );
     println!(
         "
-    \x1b[3mujhhgtg's whiteboard, unleashed\x1b[0m
+   \x1b[3mujhhgtg's whiteboard, unleashed\x1b[0m
     "
     );
 
     pollster::block_on(run_desktop());
 }
 
-enum UserEvent {
-    TrayIconEvent(tray_icon::TrayIconEvent),
-}
-
 #[cfg(not(target_os = "android"))]
 async fn run_desktop() {
-    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
-    let proxy = event_loop.create_proxy();
-    tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
-        let _ = proxy.send_event(UserEvent::TrayIconEvent(event));
-    }));
+    let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = app::App::new();
     event_loop.run_app(&mut app).expect("failed to run app");

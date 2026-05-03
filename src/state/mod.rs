@@ -10,7 +10,6 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tray_icon::TrayIcon;
 use wgpu::Backend;
 use wgpu::PresentMode;
 
@@ -619,7 +618,7 @@ impl CanvasObjectOps for CanvasObject {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum WindowMode {
     Windowed,
-    Fullscreen,
+    ExclusiveFullscreen,
     #[default]
     BorderlessFullscreen,
 }
@@ -1515,7 +1514,6 @@ pub struct AppState {
 
     // utils
     pub toasts: Toasts,
-    pub tray: Option<TrayIcon>,
 }
 
 impl Default for AppState {
@@ -1551,7 +1549,6 @@ impl Default for AppState {
                 .with_anchor(egui_notify::Anchor::BottomRight)
                 .with_margin(egui::vec2(20.0, 20.0)),
             history: History::default(),
-            tray: None,
             active_backend: None,
             present_mode_changed: false,
             #[cfg(feature = "startup_animation")]

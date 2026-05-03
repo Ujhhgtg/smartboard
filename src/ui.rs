@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use egui::{Color32, Context, Pos2, Stroke, Ui};
+use egui::{Button, Color32, Context, Pos2, Stroke, Ui};
 use wgpu::{Backend, PresentMode};
 use winit::window::Window;
 
 use crate::{
+    assets,
     state::{
         AppState, CanvasImage, CanvasObject, CanvasObjectOps, CanvasShape, CanvasShapeType,
         CanvasStroke, CanvasText, CanvasTool, DynamicBrushWidthMode, GraphicsApi,
@@ -379,13 +380,23 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
                     "窗口化",
                 )
                 .changed()
-                || ui
-                    .selectable_value(
-                        &mut state.persistent.window_mode,
-                        WindowMode::Fullscreen,
-                        "全屏",
-                    )
-                    .changed()
+                || {
+                    let response = ui.add_enabled(
+                        !state.fullscreen_video_modes.is_empty(),
+                        Button::selectable(
+                            state.persistent.window_mode == WindowMode::ExclusiveFullscreen,
+                            "独占全屏",
+                        ),
+                    );
+                    if response.clicked()
+                        && state.persistent.window_mode != WindowMode::ExclusiveFullscreen
+                    {
+                        state.persistent.window_mode = WindowMode::ExclusiveFullscreen;
+                        true
+                    } else {
+                        false
+                    }
+                }
                 || ui
                     .selectable_value(
                         &mut state.persistent.window_mode,
@@ -403,7 +414,7 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
             ui.label("显示模式:");
 
             // 显示当前选择的视频模式
-            if state.persistent.window_mode == WindowMode::Fullscreen {
+            if state.persistent.window_mode == WindowMode::ExclusiveFullscreen {
                 let mut current_selection = state.selected_video_mode_index.unwrap_or(0);
 
                 let mode = state
@@ -439,7 +450,7 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
                         }
                     });
             } else {
-                ui.label(egui::RichText::new("(仅在全屏模式下可切换)").italics());
+                ui.label(egui::RichText::new("(仅在独占全屏模式下可切换)").italics());
             }
         });
 
@@ -656,7 +667,7 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
     });
 
     collapsing(ui, "about", "关于", |ui| {
-        ui.label(env!("CARGO_PKG_NAME"));
+        ui.label("uwu (ujhhgtg's whiteboard, unleashed)");
         ui.label(format!("版本: {}", env!("CARGO_PKG_VERSION")));
         ui.label(format!("作者: {}", env!("CARGO_PKG_AUTHORS")));
     });
@@ -698,11 +709,81 @@ pub fn ui_window_controls(state: &mut AppState, ui: &mut Ui, window: &Arc<Window
         }
 
         if ui.button("最小化").clicked() {
-            window.set_visible(false);
+            window.set_minimized(true);
         }
 
         if state.persistent.show_fps {
             ui.label(format!("FPS: {}", state.fps_counter.current_fps));
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("屏幕键盘").clicked() {
+                    const TABTIP_REL: &str =
+                        r"\Program Files\Common Files\microsoft shared\ink\TabTip.exe";
+
+                    let running = std::process::Command::new("tasklist")
+                        .args(["/fi", "imagename eq TabTip.exe", "/nh"])
+                        .output()
+                        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("TabTip.exe"));
+
+                    if !running {
+                        use std::{env, ffi::OsStr, os::windows::ffi::OsStrExt};
+
+                        use windows::{Win32::UI::Shell::ShellExecuteW, core::PCWSTR};
+
+                        let target = format!(
+                            "{}{}",
+                            env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string()),
+                            TABTIP_REL
+                        );
+
+                        let target_w: Vec<u16> = OsStr::new(&target)
+                            .encode_wide()
+                            .chain(std::iter::once(0))
+                            .collect();
+
+                        let verb_w: Vec<u16> = OsStr::new("open")
+                            .encode_wide()
+                            .chain(std::iter::once(0))
+                            .collect();
+
+                        let hinst = unsafe {
+                            use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+                            // this prevents the '请求的操作需要提升。 (os error 740)' error
+                            ShellExecuteW(
+                                None,
+                                PCWSTR(verb_w.as_ptr()),
+                                PCWSTR(target_w.as_ptr()),
+                                PCWSTR::null(),
+                                PCWSTR::null(),
+                                SW_SHOWNORMAL,
+                            )
+                        };
+
+                        if hinst.0 as usize <= 32 {
+                            eprintln!("ShellExecuteW failed: {:?}", hinst);
+                        }
+
+                        return;
+                    }
+
+                    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+
+                    let handle = window.window_handle();
+                    let hwnd = if let Ok(handle) = handle
+                        && let RawWindowHandle::Win32(raw) = handle.as_raw()
+                    {
+                        Some(windows::Win32::Foundation::HWND(raw.hwnd.get() as _))
+                    } else {
+                        None
+                    };
+
+                    let _ = utils::windows::toggle_touch_keyboard(hwnd);
+                }
+            });
         }
     });
 }
@@ -1123,8 +1204,7 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
                             state.canvas.objects.get(selected_idx).cloned()
                         {
                             if ui.button("栅格化").clicked() {
-                                let strokes =
-                                    crate::utils::rasterize_text(&text, utils::font_bytes());
+                                let strokes = utils::rasterize_text(&text, assets::font_bytes());
 
                                 state.canvas.objects.remove(selected_idx);
 
@@ -1296,7 +1376,7 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
                                 let img = if img.width() > MAX_TEXTURE_SIZE
                                     || img.height() > MAX_TEXTURE_SIZE
                                 {
-                                    crate::utils::resize_image_for_texture(img, MAX_TEXTURE_SIZE)
+                                    utils::resize_image_for_texture(img, MAX_TEXTURE_SIZE)
                                 } else {
                                     img
                                 };
@@ -1389,21 +1469,6 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
                                 if ui.button("取消").clicked() {
                                     state.show_insert_text_window = false;
                                     state.new_text_content.clear();
-                                }
-
-                                #[cfg(target_os = "windows")]
-                                {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            let keyboard_btn = ui.button("屏幕键盘");
-                                            if keyboard_btn.clicked() {
-                                                let _ = crate::utils::windows::show_touch_keyboard(
-                                                    None,
-                                                );
-                                            }
-                                        },
-                                    );
                                 }
                             });
                         });

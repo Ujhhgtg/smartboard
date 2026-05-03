@@ -39,7 +39,7 @@ impl Drop for ComApartment {
     }
 }
 
-pub fn show_touch_keyboard(hwnd: Option<HWND>) -> Result<()> {
+pub fn toggle_touch_keyboard(hwnd: Option<HWND>) -> Result<()> {
     let _com = ComApartment::init_sta()?;
 
     let tip: ITipInvocation =

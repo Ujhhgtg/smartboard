@@ -1,15 +1,15 @@
-use egui::{Context, FontDefinitions};
+use egui::Context;
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::ExperimentalFeatures;
 use egui_wgpu::wgpu::{CommandEncoder, Device, Queue, StoreOp, TextureFormat, TextureView};
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use egui_winit::State;
-use std::sync::Arc;
 use wgpu::TextureUsages;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::state::OptimizationPolicy;
+use crate::utils;
 
 pub struct RenderState {
     pub device: wgpu::Device,
@@ -58,23 +58,25 @@ impl RenderState {
             .await
             .expect("failed to create device");
 
-        let swapchain_capabilities = surface.get_capabilities(&adapter);
-        let selected_format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        let swapchain_format = swapchain_capabilities
-            .formats
-            .iter()
-            .find(|d| **d == selected_format)
-            .expect("failed to select proper surface texture format");
+        // let swapchain_capabilities = surface.get_capabilities(&adapter);
+        // let selected_format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        // let swapchain_format = swapchain_capabilities
+        //     .formats
+        //     .iter()
+        //     .find(|d| **d == selected_format)
+        //     .expect("failed to select proper surface texture format");
+
+        const TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-            format: *swapchain_format,
+            format: TEXTURE_FORMAT,
             width,
             height,
             present_mode,
             desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
+            view_formats: vec![TEXTURE_FORMAT],
         };
 
         surface.configure(&device, &surface_config);
@@ -125,8 +127,7 @@ impl EguiRenderer {
     ) -> EguiRenderer {
         let mut egui_context = Context::default();
 
-        // 配置字体
-        Self::setup_fonts(&mut egui_context);
+        utils::ui::setup_fonts(&mut egui_context);
 
         let egui_state = egui_winit::State::new(
             egui_context,
@@ -152,25 +153,6 @@ impl EguiRenderer {
             renderer: egui_renderer,
             frame_started: false,
         }
-    }
-
-    fn setup_fonts(ctx: &mut Context) {
-        let mut fonts = FontDefinitions::default();
-
-        let font_bytes = crate::utils::font_bytes();
-        let font_name = "cjk_font";
-        fonts.font_data.insert(
-            font_name.to_owned(),
-            Arc::new(egui::FontData::from_owned(font_bytes.to_vec())),
-        );
-
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, font_name.to_owned());
-
-        ctx.set_fonts(fonts);
     }
 
     pub fn handle_input(&mut self, window: &Window, event: &WindowEvent) -> bool {
@@ -218,18 +200,23 @@ impl EguiRenderer {
         self.renderer
             .update_buffers(device, queue, encoder, &tris, &screen_descriptor);
         let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui main render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: window_surface_view,
                 resolve_target: None,
-                ops: egui_wgpu::wgpu::Operations {
-                    load: egui_wgpu::wgpu::LoadOp::Load,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.0_f64,
+                        g: 0.0_f64,
+                        b: 0.0_f64,
+                        a: 1.0_f64,
+                    }),
                     store: StoreOp::Store,
                 },
                 depth_slice: None,
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
-            label: Some("egui main render pass"),
             occlusion_query_set: None,
             multiview_mask: None,
         });

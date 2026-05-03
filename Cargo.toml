@@ -1,7 +1,7 @@
 [package]
 name = "uwu"
 description = "A powerful digital whiteboard built with Rust, winit, egui, and wgpu."
-version = "0.2.0-alpha.2"
+version = "0.2.0"
 authors = ["Fey Xie <feyxiexzf@gmail.com>"]
 edition = "2024"
 repository = "https://github.com/Ujhhgtg/uwu/"
@@ -39,7 +39,6 @@ image = { version = "*", default-features = false, features = [
     "png",
     "webp",
 ] }
-tray-icon = "*"
 ttf-parser = "*"
 rfd = "*"
 
@@ -71,6 +70,7 @@ windows = { version = "*", features = [
     "Win32_System_Console",
     "Win32_System_Com",
     "Win32_Foundation",
+    "Win32_UI_Shell",
 ] }
 windows-core = { version = "*", default-features = false }
 winreg = "*"

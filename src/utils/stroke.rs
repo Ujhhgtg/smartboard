@@ -3,8 +3,8 @@ use std::time::Instant;
 use egui::Pos2;
 
 use crate::state::{
-    ActiveStroke, AppState, CanvasObject, CanvasStroke, DynamicBrushWidthMode,
-    PointerInteraction, PointerState, StrokeWidth,
+    ActiveStroke, AppState, CanvasObject, CanvasStroke, DynamicBrushWidthMode, PointerInteraction,
+    PointerState, StrokeWidth,
 };
 
 pub fn brush_stroke_start(state: &mut AppState, pointer_id: u64, pos: Pos2) {
@@ -78,9 +78,7 @@ pub fn brush_stroke_add_point(
         }
     }
 
-    if active_stroke.points.is_empty()
-        || active_stroke.points.last().unwrap().distance(pos) > 1.0
-    {
+    if active_stroke.points.is_empty() || active_stroke.points.last().unwrap().distance(pos) > 1.0 {
         let speed = if !active_stroke.points.is_empty() && !active_stroke.times.is_empty() {
             let last_time = active_stroke.times.last().unwrap();
             let time_delta = ((current_time - last_time) as f32).max(0.001);
