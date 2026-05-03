@@ -1484,7 +1484,7 @@ pub struct AppState {
     pub selected_video_mode_index: Option<usize>, // 选中的视频模式索引
     pub fps_counter: FpsCounter,                  // FPS 计数器
     pub new_quick_color: Color32,                 // 新快捷颜色，用于添加
-    pub touch_used: bool, // 标志当前帧是否已由触控处理，防止鼠标代码重复处理
+    pub using_touch: bool, // 标志当前帧是否已由触控处理，防止鼠标代码重复处理
     pub show_touch_points: bool, // 是否显示触控点，用于调试
 
     // screenshot states
@@ -1536,7 +1536,7 @@ impl Default for AppState {
             selected_video_mode_index: None,
             show_quick_color_edit_window: false,
             new_quick_color: Color32::WHITE,
-            touch_used: false,
+            using_touch: false,
             show_touch_points: false,
             show_welcome_window: true,
             show_page_management_window: false,

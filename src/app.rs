@@ -463,7 +463,7 @@ impl ApplicationHandler<UserEvent> for App {
                 id,
                 ..
             }) => {
-                self.state.touch_used = true;
+                self.state.using_touch = true;
 
                 // Convert touch location to logical coordinates
                 let window = self.window.as_ref().unwrap();
@@ -493,6 +493,8 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                     }
                     TouchPhase::Ended | TouchPhase::Cancelled => {
+                        self.state.using_touch = false;
+
                         self.state.touch_points.remove(&id);
 
                         // 如果当前工具是画笔，结束笔画
