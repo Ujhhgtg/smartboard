@@ -5,6 +5,7 @@ use flat::CanvasStateFlat;
 use egui::{Color32, Pos2, Stroke};
 use egui_notify::Toasts;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1473,7 +1474,7 @@ pub struct AppState {
     pub history: History,                                // 当前页面的历史记录
     pub pages: Vec<PageState>,                           // 分页
     pub current_page: usize,                             // 当前页码
-    pub pointers: Vec<PointerState>, // 统一指针状态列表（鼠标 id=0，触控使用 winit touch id）
+    pub pointers: HashMap<u64, PointerState>, // 统一指针状态表（鼠标 id=0，触控使用 winit touch id）
     pub brush_color: Color32,        // 画笔颜色
     pub brush_width: f32,            // 画笔大小
     pub dynamic_brush_width_mode: DynamicBrushWidthMode, // 动态画笔大小微调
@@ -1526,7 +1527,7 @@ impl Default for AppState {
             canvas: default_page.canvas.clone(),
             pages: vec![default_page],
             current_page: 0,
-            pointers: Vec::new(),
+            pointers: HashMap::new(),
             brush_color: Color32::WHITE,
             brush_width: 3.0,
             dynamic_brush_width_mode: DynamicBrushWidthMode::default(),

@@ -16,19 +16,22 @@ pub fn brush_stroke_start(state: &mut AppState, pointer_id: u64, pos: Pos2) {
         1,
         None,
     );
-    state.pointers.push(PointerState {
-        id: pointer_id,
-        pos,
-        interaction: PointerInteraction::Drawing {
-            active_stroke: ActiveStroke {
-                points: vec![pos],
-                width,
-                times: vec![0.0],
-                start_time,
-                last_movement_time: start_time,
+    state.pointers.insert(
+        pointer_id,
+        PointerState {
+            id: pointer_id,
+            pos,
+            interaction: PointerInteraction::Drawing {
+                active_stroke: ActiveStroke {
+                    points: vec![pos],
+                    width,
+                    times: vec![0.0],
+                    start_time,
+                    last_movement_time: start_time,
+                },
             },
         },
-    });
+    );
 }
 
 pub fn brush_stroke_add_point(
@@ -37,7 +40,7 @@ pub fn brush_stroke_add_point(
     pos: Pos2,
     apply_straightening: bool,
 ) {
-    let Some(pointer) = state.pointers.iter_mut().find(|p| p.id == pointer_id) else {
+    let Some(pointer) = state.pointers.get_mut(&pointer_id) else {
         return;
     };
     pointer.pos = pos;
@@ -106,28 +109,29 @@ pub fn brush_stroke_add_point(
 }
 
 pub fn brush_stroke_end(state: &mut AppState, pointer_id: u64) {
-    let Some(idx) = state.pointers.iter().position(|p| p.id == pointer_id) else {
-        return;
-    };
-
     // Validate stroke before removing
-    let valid = match &state.pointers[idx].interaction {
-        PointerInteraction::Drawing { active_stroke } => {
-            if let StrokeWidth::Dynamic(v) = &active_stroke.width {
-                v.len() == active_stroke.points.len()
-            } else {
-                true
+    let valid = state
+        .pointers
+        .get(&pointer_id)
+        .is_some_and(|p| match &p.interaction {
+            PointerInteraction::Drawing { active_stroke } => {
+                if let StrokeWidth::Dynamic(v) = &active_stroke.width {
+                    v.len() == active_stroke.points.len()
+                } else {
+                    true
+                }
             }
-        }
-        _ => false,
-    };
+            _ => false,
+        });
 
     if !valid {
-        state.pointers.remove(idx);
+        state.pointers.remove(&pointer_id);
         return;
     }
 
-    let pointer = state.pointers.remove(idx);
+    let Some(pointer) = state.pointers.remove(&pointer_id) else {
+        return;
+    };
     let PointerInteraction::Drawing { active_stroke } = pointer.interaction else {
         unreachable!()
     };

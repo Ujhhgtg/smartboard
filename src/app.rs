@@ -480,7 +480,7 @@ impl ApplicationHandler<UserEvent> for App {
                             brush_stroke_start(&mut self.state, id, pos);
                         }
                         CanvasTool::Select
-                            if !self.state.pointers.iter().any(|p| {
+                            if !self.state.pointers.values().any(|p| {
                                 matches!(p.interaction, PointerInteraction::Selecting { .. })
                             }) =>
                         {
@@ -505,23 +505,29 @@ impl ApplicationHandler<UserEvent> for App {
                                 (None, None)
                             };
 
-                            self.state.pointers.push(PointerState {
+                            self.state.pointers.insert(
                                 id,
-                                pos,
-                                interaction: PointerInteraction::Selecting {
-                                    drag_start: pos,
-                                    dragged_handle,
-                                    drag_original_transform,
-                                    drag_accumulated_delta: Vec2::ZERO,
+                                PointerState {
+                                    id,
+                                    pos,
+                                    interaction: PointerInteraction::Selecting {
+                                        drag_start: pos,
+                                        dragged_handle,
+                                        drag_original_transform,
+                                        drag_accumulated_delta: Vec2::ZERO,
+                                    },
                                 },
-                            });
+                            );
                         }
                         CanvasTool::ObjectEraser | CanvasTool::PixelEraser => {
-                            self.state.pointers.push(PointerState {
+                            self.state.pointers.insert(
                                 id,
-                                pos,
-                                interaction: PointerInteraction::Erasing,
-                            });
+                                PointerState {
+                                    id,
+                                    pos,
+                                    interaction: PointerInteraction::Erasing,
+                                },
+                            );
                         }
                         _ => {}
                     },
@@ -531,7 +537,7 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                         CanvasTool::Select => {
                             if let Some(pointer) =
-                                self.state.pointers.iter_mut().find(|p| p.id == id)
+                                self.state.pointers.get_mut(&id)
                             {
                                 pointer.pos = pos;
 
@@ -569,7 +575,7 @@ impl ApplicationHandler<UserEvent> for App {
                         }
                         CanvasTool::ObjectEraser | CanvasTool::PixelEraser => {
                             if let Some(pointer) =
-                                self.state.pointers.iter_mut().find(|p| p.id == id)
+                                self.state.pointers.get_mut(&id)
                             {
                                 pointer.pos = pos;
                             }
@@ -581,8 +587,9 @@ impl ApplicationHandler<UserEvent> for App {
                             brush_stroke_end(&mut self.state, id);
                         }
                         CanvasTool::Select => {
-                            if let Some(idx) = self.state.pointers.iter().position(|p| p.id == id) {
-                                let pointer = &self.state.pointers[idx];
+                            if let Some(pointer) =
+                                self.state.pointers.get(&id)
+                            {
                                 if let PointerInteraction::Selecting {
                                     drag_accumulated_delta,
                                     drag_original_transform,
@@ -612,11 +619,11 @@ impl ApplicationHandler<UserEvent> for App {
                                         }
                                     }
                                 }
-                                self.state.pointers.remove(idx);
                             }
+                            self.state.pointers.remove(&id);
                         }
                         CanvasTool::ObjectEraser | CanvasTool::PixelEraser => {
-                            self.state.pointers.retain(|p| p.id != id);
+                            self.state.pointers.remove(&id);
                         }
                         _ => {}
                     },

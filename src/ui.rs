@@ -835,22 +835,6 @@ fn apply_page_action(state: &mut AppState, action: PageAction) {
         PageAction::New => {
             add_new_page_state(state);
         }
-        // PageAction::Delete if state.pages.len() > 1 => {
-        //     let i = state.current_page;
-        //     state.pages.remove(i);
-        //     if i >= state.pages.len() {
-        //         state.current_page = state.pages.len() - 1;
-        //     }
-        //     state.canvas = std::mem::take(&mut state.pages[state.current_page].canvas);
-        //     state.history = std::mem::take(&mut state.pages[state.current_page].history);
-        //     state.selected_object = None;
-        //     state.drag_start_pos = None;
-        //     state.dragged_handle = None;
-        //     state.drag_move_accumulated_delta = egui::Vec2::ZERO;
-        //     state.drag_original_transform = None;
-        //     state.active_strokes.clear();
-        //     state.is_drawing = false;
-        // }
         _ => {}
     }
 }
@@ -1201,24 +1185,16 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
                         // Drain all active drawing pointers when color changes
                         let drawing_ids: Vec<u64> = state
                             .pointers
-                            .iter()
-                            .filter(|p| {
-                                matches!(p.interaction, PointerInteraction::Drawing { .. })
-                            })
+                            .values()
+                            .filter(|p| matches!(p.interaction, PointerInteraction::Drawing { .. }))
                             .map(|p| p.id)
                             .collect();
                         for id in drawing_ids {
-                            if let Some(idx) =
-                                state.pointers.iter().position(|p| p.id == id)
-                            {
-                                let pointer = state.pointers.remove(idx);
-                                if let PointerInteraction::Drawing {
-                                    active_stroke,
-                                } = pointer.interaction
+                            if let Some(pointer) = state.pointers.remove(&id) {
+                                if let PointerInteraction::Drawing { active_stroke } =
+                                    pointer.interaction
                                 {
-                                    if let StrokeWidth::Dynamic(v) =
-                                        &active_stroke.width
-                                    {
+                                    if let StrokeWidth::Dynamic(v) = &active_stroke.width {
                                         if v.len() != active_stroke.points.len() {
                                             continue;
                                         }
@@ -1615,7 +1591,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
 
         // 绘制当前正在绘制的笔画
         // TODO: unify with CanvasStroke::paint()
-        for pointer in &state.pointers {
+        for pointer in state.pointers.values() {
             if let PointerInteraction::Drawing { active_stroke } = &pointer.interaction {
                 if let StrokeWidth::Dynamic(v) = &active_stroke.width {
                     if v.len() != active_stroke.points.len() {
@@ -1662,7 +1638,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
 
         // 绘制触控点
         if state.show_touch_points {
-            for pointer in &state.pointers {
+            for pointer in state.pointers.values() {
                 if pointer.id == 0 {
                     continue;
                 }
@@ -1698,7 +1674,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
         }
 
         // 处理指针输入
-        let has_touch = state.pointers.iter().any(|p| p.id != 0);
+        let has_touch = state.pointers.keys().any(|&k| k != 0);
         let pointer_pos = if has_touch {
             None
         } else {
@@ -1744,25 +1720,26 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                     (None, None)
                                 };
 
-                            state.pointers.push(PointerState {
-                                id: 0,
-                                pos,
-                                interaction: PointerInteraction::Selecting {
-                                    drag_start: pos,
-                                    dragged_handle,
-                                    drag_original_transform,
-                                    drag_accumulated_delta: egui::Vec2::ZERO,
+                            state.pointers.insert(
+                                0,
+                                PointerState {
+                                    id: 0,
+                                    pos,
+                                    interaction: PointerInteraction::Selecting {
+                                        drag_start: pos,
+                                        dragged_handle,
+                                        drag_original_transform,
+                                        drag_accumulated_delta: egui::Vec2::ZERO,
+                                    },
                                 },
-                            });
+                            );
                         }
                     }
 
                     // Handle dragging: move or resize the selected object
                     if response.dragged() && state.selected_object_index.is_some() {
                         if let Some(current_pos) = pointer_pos {
-                            if let Some(pointer) =
-                                state.pointers.iter_mut().find(|p| p.id == 0)
-                            {
+                            if let Some(pointer) = state.pointers.get_mut(&0) {
                                 pointer.pos = current_pos;
                                 if let PointerInteraction::Selecting {
                                     ref mut drag_start,
@@ -1773,8 +1750,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                 {
                                     let delta = current_pos - *drag_start;
 
-                                    if let Some(selected_idx) =
-                                        state.selected_object_index
+                                    if let Some(selected_idx) = state.selected_object_index
                                         && selected_idx < state.canvas.objects.len()
                                     {
                                         if let Some(handle) = dragged_handle {
@@ -1806,19 +1782,14 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
 
                     // Handle drag stop: save move/resize to history and clear state
                     if response.drag_stopped() {
-                        if let Some(idx) =
-                            state.pointers.iter().position(|p| p.id == 0)
-                        {
-                            let pointer = &state.pointers[idx];
+                        if let Some(pointer) = state.pointers.get(&0) {
                             if let PointerInteraction::Selecting {
                                 drag_accumulated_delta,
                                 drag_original_transform,
                                 ..
                             } = &pointer.interaction
                             {
-                                if let Some(selected_idx) =
-                                    state.selected_object_index
-                                {
+                                if let Some(selected_idx) = state.selected_object_index {
                                     if *drag_accumulated_delta != egui::Vec2::ZERO {
                                         state.history.save_move_object(
                                             selected_idx,
@@ -1828,14 +1799,11 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                     }
                                 }
                                 if let Some(original) = drag_original_transform.clone() {
-                                    if let Some(selected_idx) =
-                                        state.selected_object_index
-                                        && selected_idx
-                                            < state.canvas.objects.len()
+                                    if let Some(selected_idx) = state.selected_object_index
+                                        && selected_idx < state.canvas.objects.len()
                                     {
-                                        let new_transform = state.canvas.objects
-                                            [selected_idx]
-                                            .get_transform();
+                                        let new_transform =
+                                            state.canvas.objects[selected_idx].get_transform();
                                         state.history.save_transform_object(
                                             selected_idx,
                                             original,
@@ -1844,8 +1812,8 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                     }
                                 }
                             }
-                            state.pointers.remove(idx);
                         }
+                        state.pointers.remove(&0);
                     }
                 }
             }
@@ -1854,14 +1822,11 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                 let eraser_positions: Vec<Pos2> = if has_touch {
                     state
                         .pointers
-                        .iter()
-                        .filter(|p| {
-                            matches!(p.interaction, PointerInteraction::Erasing)
-                        })
+                        .values()
+                        .filter(|p| matches!(p.interaction, PointerInteraction::Erasing))
                         .map(|p| p.pos)
                         .collect()
-                } else if response.drag_started() || response.clicked() || response.dragged()
-                {
+                } else if response.drag_started() || response.clicked() || response.dragged() {
                     pointer_pos.into_iter().collect()
                 } else {
                     vec![]
@@ -1874,8 +1839,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                     for (i, object) in state.canvas.objects.iter().enumerate().rev() {
                         match object {
                             CanvasObject::Image(img) => {
-                                let img_rect =
-                                    egui::Rect::from_min_size(img.pos, img.size);
+                                let img_rect = egui::Rect::from_min_size(img.pos, img.size);
                                 if img_rect.contains(pos) {
                                     to_remove.push(i);
                                 }
@@ -1887,8 +1851,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                     text.color,
                                 );
                                 let text_size = text_galley.size();
-                                let text_rect =
-                                    egui::Rect::from_min_size(text.pos, text_size);
+                                let text_rect = egui::Rect::from_min_size(text.pos, text_size);
                                 if text_rect.contains(pos) {
                                     to_remove.push(i);
                                 }
@@ -1900,11 +1863,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                 }
                             }
                             CanvasObject::Stroke(stroke) => {
-                                if utils::point_intersects_stroke(
-                                    pos,
-                                    stroke,
-                                    state.eraser_size,
-                                ) {
+                                if utils::point_intersects_stroke(pos, stroke, state.eraser_size) {
                                     to_remove.push(i);
                                 }
                             }
@@ -1922,10 +1881,8 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                 let eraser_positions: Vec<Pos2> = if has_touch {
                     state
                         .pointers
-                        .iter()
-                        .filter(|p| {
-                            matches!(p.interaction, PointerInteraction::Erasing)
-                        })
+                        .values()
+                        .filter(|p| matches!(p.interaction, PointerInteraction::Erasing))
                         .map(|p| p.pos)
                         .collect()
                 } else if response.dragged() || response.clicked() {
@@ -1971,8 +1928,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                 let p2 = stroke.points[i + 1];
                                 let segment_width = stroke.width.get(i);
 
-                                let dist =
-                                    utils::point_to_line_segment_distance(pos, p1, p2);
+                                let dist = utils::point_to_line_segment_distance(pos, p1, p2);
 
                                 if dist > eraser_radius + segment_width / 2.0 {
                                     current_points.push(p2);
@@ -2017,44 +1973,36 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                 .canvas
                                 .objects
                                 .iter()
-                                .filter(|obj| {
-                                    !matches!(obj, CanvasObject::Stroke(_))
-                                })
+                                .filter(|obj| !matches!(obj, CanvasObject::Stroke(_)))
                                 .cloned()
                                 .collect();
-                            let old_objects =
-                                std::mem::take(&mut state.canvas.objects);
+                            let old_objects = std::mem::take(&mut state.canvas.objects);
                             state.history.save_clear_objects(old_objects);
                             state.canvas.objects = non_strokes;
                         } else {
                             state
                                 .canvas
                                 .objects
-                                .retain(|obj| {
-                                    !matches!(obj, CanvasObject::Stroke(_))
-                                });
+                                .retain(|obj| !matches!(obj, CanvasObject::Stroke(_)));
                         }
 
                         for stroke in new_strokes {
-                            state
-                                .canvas
-                                .objects
-                                .push(CanvasObject::Stroke(stroke));
+                            state.canvas.objects.push(CanvasObject::Stroke(stroke));
                         }
                     }
                 }
             }
 
             CanvasTool::Brush => {
-                // Skip mouse handling if touch is active (touch handled in app.rs)
+                // Skip mouse handling if touch is active
                 if has_touch {
                     return;
                 }
 
                 let is_drawing = state
                     .pointers
-                    .iter()
-                    .any(|p| p.id == 0 && matches!(p.interaction, PointerInteraction::Drawing { .. }));
+                    .get(&0)
+                    .is_some_and(|p| matches!(p.interaction, PointerInteraction::Drawing { .. }));
 
                 // 画笔工具
                 if response.drag_started() {
@@ -2067,9 +2015,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                         brush_stroke_start(state, 0, pos);
                     }
                 } else if response.dragged() {
-                    if is_drawing
-                        && let Some(pos) = pointer_pos
-                    {
+                    if is_drawing && let Some(pos) = pointer_pos {
                         brush_stroke_add_point(state, 0, pos, false);
                     }
                 } else if response.drag_stopped() {
