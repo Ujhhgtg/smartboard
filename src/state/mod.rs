@@ -790,7 +790,7 @@ impl Default for PersistentState {
             interpolation_frequency: 0.1,
             quick_colors: utils::get_default_quick_colors(),
 
-            show_fps: true,
+            show_fps: false,
             window_mode: WindowMode::default(),
             present_mode: PresentMode::AutoVsync,
             optimization_policy: OptimizationPolicy::default(),
@@ -1095,6 +1095,27 @@ pub struct ActiveStroke {
     pub times: Vec<f64>,             // 每个点的时间戳（用于速度计算）
     pub start_time: Instant,         // 笔画开始时间
     pub last_movement_time: Instant, // 最后一次移动的时间（用于检测停留）
+}
+
+/// Unified per-pointer interaction state for all tools
+pub enum PointerInteraction {
+    Drawing {
+        active_stroke: ActiveStroke,
+    },
+    Selecting {
+        drag_start: Pos2,
+        dragged_handle: Option<TransformHandle>,
+        drag_original_transform: Option<ObjectTransform>,
+        drag_accumulated_delta: egui::Vec2,
+    },
+    Erasing,
+}
+
+/// Represents a single pointer (touch or mouse) on the canvas
+pub struct PointerState {
+    pub id: u64,
+    pub pos: Pos2,
+    pub interaction: PointerInteraction,
 }
 
 #[cfg(feature = "startup_animation")]
@@ -1449,23 +1470,17 @@ impl Default for History {
 // 应用程序状态
 pub struct AppState {
     // canvas states
-    pub canvas: CanvasState,                              // 当前页面的画布
-    pub history: History,                                 // 当前页面的历史记录
-    pub pages: Vec<PageState>,                            // 分页
-    pub current_page: usize,                              // 当前页码
-    pub active_strokes: HashMap<u64, ActiveStroke>, // 多点触控笔画，存储触控 ID 到正在绘制的笔画
-    pub is_drawing: bool,                           // 是否正在绘制
-    pub brush_color: Color32,                       // 画笔颜色
-    pub brush_width: f32,                           // 画笔大小
+    pub canvas: CanvasState,                             // 当前页面的画布
+    pub history: History,                                // 当前页面的历史记录
+    pub pages: Vec<PageState>,                           // 分页
+    pub current_page: usize,                             // 当前页码
+    pub pointers: HashMap<u64, PointerState>, // 统一指针状态表（鼠标 id=0，触控使用 winit touch id）
+    pub brush_color: Color32,        // 画笔颜色
+    pub brush_width: f32,            // 画笔大小
     pub dynamic_brush_width_mode: DynamicBrushWidthMode, // 动态画笔大小微调
-    pub current_tool: CanvasTool,                   // 当前工具
-    pub eraser_size: f32,                           // 橡皮擦大小
-    pub selected_object_index: Option<usize>,       // 选中的对象索引
-    pub drag_start_pos: Option<Pos2>,               // 拖拽开始位置
-    pub dragged_handle: Option<TransformHandle>,    // 正在拖拽的调整句柄
-    pub drag_move_accumulated_delta: egui::Vec2,    // 移动拖拽累计位移
-    pub drag_original_transform: Option<ObjectTransform>, // 拖拽开始时的原始变换（用于 resize 历史记录）
-    pub touch_points: HashMap<u64, Pos2>,                 // 多点触控点，存储触控 ID 到位置的映射
+    pub current_tool: CanvasTool,    // 当前工具
+    pub eraser_size: f32,            // 橡皮擦大小
+    pub selected_object_index: Option<usize>, // 选中的对象索引（全局共享）
 
     // persistent states
     pub persistent: PersistentState,
@@ -1484,8 +1499,7 @@ pub struct AppState {
     pub selected_video_mode_index: Option<usize>, // 选中的视频模式索引
     pub fps_counter: FpsCounter,                  // FPS 计数器
     pub new_quick_color: Color32,                 // 新快捷颜色，用于添加
-    pub using_touch: bool, // 标志当前帧是否已由触控处理，防止鼠标代码重复处理
-    pub show_touch_points: bool, // 是否显示触控点，用于调试
+    pub show_touch_points: bool,                  // 是否显示触控点，用于调试
 
     // screenshot states
     pub screenshot_path: Option<PathBuf>,
@@ -1513,30 +1527,23 @@ impl Default for AppState {
             canvas: default_page.canvas.clone(),
             pages: vec![default_page],
             current_page: 0,
-            active_strokes: HashMap::new(),
-            is_drawing: false,
+            pointers: HashMap::new(),
             brush_color: Color32::WHITE,
             brush_width: 3.0,
             dynamic_brush_width_mode: DynamicBrushWidthMode::default(),
             current_tool: CanvasTool::Brush,
             eraser_size: 10.0,
             selected_object_index: None,
-            drag_start_pos: None,
-            dragged_handle: None,
-            drag_move_accumulated_delta: egui::Vec2::ZERO,
-            drag_original_transform: None,
             show_size_preview: false,
             fps_counter: FpsCounter::new(),
             should_quit: false,
             show_insert_text_window: false,
             new_text_content: "".to_string(),
             show_insert_shape_window: false,
-            touch_points: HashMap::new(),
             fullscreen_video_modes: Vec::new(),
             selected_video_mode_index: None,
             show_quick_color_edit_window: false,
             new_quick_color: Color32::WHITE,
-            using_touch: false,
             show_touch_points: false,
             show_welcome_window: true,
             show_page_management_window: false,

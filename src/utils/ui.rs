@@ -79,12 +79,7 @@ pub enum PageAction {
 
 pub fn clear_interaction_state(state: &mut AppState) {
     state.selected_object_index = None;
-    state.drag_start_pos = None;
-    state.dragged_handle = None;
-    state.drag_move_accumulated_delta = egui::Vec2::ZERO;
-    state.drag_original_transform = None;
-    state.active_strokes.clear();
-    state.is_drawing = false;
+    state.pointers.clear();
 }
 
 pub fn switch_to_page_state(state: &mut AppState, page_index: usize) {
