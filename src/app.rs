@@ -2,12 +2,15 @@ use crate::assets::ICON;
 use crate::render::RenderState;
 #[cfg(feature = "startup_animation")]
 use crate::state::StartupAnimation;
-use crate::state::{AppState, CanvasObject, CanvasTool};
+use crate::state::{
+    AppState, CanvasObject, CanvasObjectOps, CanvasTool, PointerInteraction, PointerState,
+};
+use crate::utils;
 use crate::utils::stroke::{brush_stroke_add_point, brush_stroke_end, brush_stroke_start};
 use crate::utils::ui::{apply_theme_mode_and_canvas_color, apply_window_mode};
 use crate::{UserEvent, ui};
 use core::f32;
-use egui::Pos2;
+use egui::{Pos2, Vec2};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
@@ -463,45 +466,160 @@ impl ApplicationHandler<UserEvent> for App {
                 id,
                 ..
             }) => {
-                self.state.using_touch = true;
-
                 // Convert touch location to logical coordinates
                 let window = self.window.as_ref().unwrap();
                 let scale_factor = window.scale_factor() as f32;
-                let logical_pos = Pos2::new(
+                let pos = Pos2::new(
                     location.x as f32 / scale_factor,
                     location.y as f32 / scale_factor,
                 );
 
-                // Store touch point in state for rendering
                 match phase {
-                    TouchPhase::Started => {
-                        self.state.touch_points.insert(id, logical_pos);
-
-                        // 如果当前工具是画笔，开始新的笔画
-                        if self.state.current_tool == CanvasTool::Brush {
-                            self.state.is_drawing = true;
-                            brush_stroke_start(&mut self.state, id, logical_pos);
+                    TouchPhase::Started => match self.state.current_tool {
+                        CanvasTool::Brush => {
+                            brush_stroke_start(&mut self.state, id, pos);
                         }
-                    }
-                    TouchPhase::Moved => {
-                        self.state.touch_points.insert(id, logical_pos);
+                        CanvasTool::Select
+                            if !self.state.pointers.iter().any(|p| {
+                                matches!(p.interaction, PointerInteraction::Selecting { .. })
+                            }) =>
+                        {
+                            // Hit-test objects (last to first for z-order)
+                            for (i, object) in self.state.canvas.objects.iter().enumerate().rev() {
+                                if object.bounding_box().contains(pos) {
+                                    self.state.selected_object_index = Some(i);
+                                    break;
+                                }
+                            }
 
-                        // 如果当前工具是画笔，继续绘制
-                        if self.state.current_tool == CanvasTool::Brush {
-                            brush_stroke_add_point(&mut self.state, id, logical_pos, false);
+                            let (dragged_handle, drag_original_transform) = if let Some(idx) =
+                                self.state.selected_object_index
+                                && idx < self.state.canvas.objects.len()
+                            {
+                                let object = &self.state.canvas.objects[idx];
+                                let bbox = object.bounding_box();
+                                let handle = utils::get_transform_handle_at_pos(bbox, pos);
+                                let transform = handle.is_some().then(|| object.get_transform());
+                                (handle, transform)
+                            } else {
+                                (None, None)
+                            };
+
+                            self.state.pointers.push(PointerState {
+                                id,
+                                pos,
+                                interaction: PointerInteraction::Selecting {
+                                    drag_start: pos,
+                                    dragged_handle,
+                                    drag_original_transform,
+                                    drag_accumulated_delta: Vec2::ZERO,
+                                },
+                            });
                         }
-                    }
-                    TouchPhase::Ended | TouchPhase::Cancelled => {
-                        self.state.using_touch = false;
+                        CanvasTool::ObjectEraser | CanvasTool::PixelEraser => {
+                            self.state.pointers.push(PointerState {
+                                id,
+                                pos,
+                                interaction: PointerInteraction::Erasing,
+                            });
+                        }
+                        _ => {}
+                    },
+                    TouchPhase::Moved => match self.state.current_tool {
+                        CanvasTool::Brush => {
+                            brush_stroke_add_point(&mut self.state, id, pos, false);
+                        }
+                        CanvasTool::Select => {
+                            if let Some(pointer) =
+                                self.state.pointers.iter_mut().find(|p| p.id == id)
+                            {
+                                pointer.pos = pos;
 
-                        self.state.touch_points.remove(&id);
+                                if let PointerInteraction::Selecting {
+                                    ref mut drag_start,
+                                    dragged_handle,
+                                    ref mut drag_accumulated_delta,
+                                    ..
+                                } = pointer.interaction
+                                {
+                                    let delta = pos - *drag_start;
 
-                        // 如果当前工具是画笔，结束笔画
-                        if self.state.current_tool == CanvasTool::Brush {
+                                    if let Some(idx) = self.state.selected_object_index
+                                        && idx < self.state.canvas.objects.len()
+                                    {
+                                        if let Some(handle) = dragged_handle {
+                                            if let Some(object) =
+                                                self.state.canvas.objects.get_mut(idx)
+                                            {
+                                                object.transform(handle, delta, *drag_start, pos);
+                                            }
+                                        } else {
+                                            if let Some(object) =
+                                                self.state.canvas.objects.get_mut(idx)
+                                            {
+                                                CanvasObject::move_object(object, delta);
+                                            }
+                                            *drag_accumulated_delta += delta;
+                                        }
+                                    }
+
+                                    *drag_start = pos;
+                                }
+                            }
+                        }
+                        CanvasTool::ObjectEraser | CanvasTool::PixelEraser => {
+                            if let Some(pointer) =
+                                self.state.pointers.iter_mut().find(|p| p.id == id)
+                            {
+                                pointer.pos = pos;
+                            }
+                        }
+                        _ => {}
+                    },
+                    TouchPhase::Ended | TouchPhase::Cancelled => match self.state.current_tool {
+                        CanvasTool::Brush => {
                             brush_stroke_end(&mut self.state, id);
                         }
-                    }
+                        CanvasTool::Select => {
+                            if let Some(idx) = self.state.pointers.iter().position(|p| p.id == id) {
+                                let pointer = &self.state.pointers[idx];
+                                if let PointerInteraction::Selecting {
+                                    drag_accumulated_delta,
+                                    drag_original_transform,
+                                    ..
+                                } = &pointer.interaction
+                                {
+                                    if let Some(sel_idx) = self.state.selected_object_index {
+                                        if *drag_accumulated_delta != Vec2::ZERO {
+                                            self.state.history.save_move_object(
+                                                sel_idx,
+                                                -*drag_accumulated_delta,
+                                                *drag_accumulated_delta,
+                                            );
+                                        }
+                                    }
+                                    if let Some(original) = drag_original_transform.clone() {
+                                        if let Some(sel_idx) = self.state.selected_object_index
+                                            && sel_idx < self.state.canvas.objects.len()
+                                        {
+                                            let new_transform =
+                                                self.state.canvas.objects[sel_idx].get_transform();
+                                            self.state.history.save_transform_object(
+                                                sel_idx,
+                                                original,
+                                                new_transform,
+                                            );
+                                        }
+                                    }
+                                }
+                                self.state.pointers.remove(idx);
+                            }
+                        }
+                        CanvasTool::ObjectEraser | CanvasTool::PixelEraser => {
+                            self.state.pointers.retain(|p| p.id != id);
+                        }
+                        _ => {}
+                    },
                 }
 
                 self.window.as_ref().unwrap().request_redraw();
