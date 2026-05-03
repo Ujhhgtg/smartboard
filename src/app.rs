@@ -227,7 +227,7 @@ error: failed to get monitor
             ui::ui_welcome(&mut self.state, ctx);
         }
 
-        ui::ui_toolbar(&mut self.state, ctx, window, render_state);
+        ui::ui_toolbar(&mut self.state, ctx, window);
 
         ui::ui_pages_nav(&mut self.state, ctx);
 
@@ -356,6 +356,11 @@ error: failed to get monitor
                 true
             }
         });
+
+        if self.state.present_mode_changed {
+            render_state.set_present_mode(self.state.persistent.present_mode);
+            self.state.present_mode_changed = false;
+        }
 
         if self.state.persistent.show_fps {
             _ = self.state.fps_counter.update();

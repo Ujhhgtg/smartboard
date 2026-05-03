@@ -4,10 +4,7 @@ use egui::{Color32, Context, Visuals};
 use egui_notify::Toasts;
 use winit::window::{Fullscreen, Window};
 
-use crate::{
-    render::RenderState,
-    state::{AppState, CanvasState, History, PageState, ThemeMode, WindowMode},
-};
+use crate::state::{AppState, CanvasState, History, PageState, ThemeMode, WindowMode};
 
 pub fn apply_theme_mode_and_canvas_color(
     ctx: &Context,
@@ -72,11 +69,6 @@ pub fn apply_window_mode(state: &mut AppState, window: &Arc<Window>) {
             window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
         }
     }
-}
-
-pub fn apply_present_mode(state: &mut AppState, render_state: &mut RenderState) {
-    let wgpu_present_mode = state.persistent.present_mode;
-    render_state.set_present_mode(wgpu_present_mode);
 }
 
 pub enum PageAction {

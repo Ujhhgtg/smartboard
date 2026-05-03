@@ -1493,6 +1493,9 @@ pub struct AppState {
     // cached states
     pub active_backend: Option<Backend>,
 
+    // reactive states
+    pub present_mode_changed: bool,
+
     #[cfg(target_os = "windows")]
     pub show_console: bool, // 是否显示控制台 [仅 Windows]
     #[cfg(feature = "startup_animation")]
@@ -1545,6 +1548,7 @@ impl Default for AppState {
             history: History::default(),
             tray: None,
             active_backend: None,
+            present_mode_changed: false,
             #[cfg(target_os = "windows")]
             show_console: false,
             #[cfg(feature = "startup_animation")]

@@ -5,7 +5,6 @@ use wgpu::{Backend, PresentMode};
 use winit::window::Window;
 
 use crate::{
-    render::RenderState,
     state::{
         AppState, CanvasImage, CanvasObject, CanvasObjectOps, CanvasShape, CanvasShapeType,
         CanvasStroke, CanvasText, CanvasTool, DynamicBrushWidthMode, GraphicsApi,
@@ -15,8 +14,8 @@ use crate::{
         self,
         stroke::{brush_stroke_add_point, brush_stroke_end, brush_stroke_start},
         ui::{
-            PageAction, add_new_page_state, apply_present_mode, apply_theme_mode_and_canvas_color,
-            apply_window_mode, clear_interaction_state, load_canvas_from_file, save_canvas_to_file,
+            PageAction, add_new_page_state, apply_theme_mode_and_canvas_color, apply_window_mode,
+            clear_interaction_state, load_canvas_from_file, save_canvas_to_file,
             switch_to_page_state,
         },
     },
@@ -69,13 +68,7 @@ pub fn ui_welcome(state: &mut AppState, ctx: &Context) {
         });
 }
 
-pub fn ui_toolbar_settings(
-    state: &mut AppState,
-    ctx: &Context,
-    ui: &mut Ui,
-    window: &Arc<Window>,
-    render_state: &mut RenderState,
-) {
+pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, window: &Arc<Window>) {
     ui.collapsing("外观", |ui| {
         ui.horizontal(|ui| {
             ui.label("画布颜色:");
@@ -411,7 +404,7 @@ pub fn ui_toolbar_settings(
                     )
                     .changed()
             {
-                apply_present_mode(state, render_state);
+                state.present_mode_changed = true;
             }
         });
 
@@ -590,7 +583,7 @@ pub fn ui_toolbar_settings(
                     state.persistent.theme_mode,
                     state.persistent.canvas_color,
                 );
-                apply_present_mode(state, render_state);
+                state.present_mode_changed = true;
                 apply_window_mode(state, window);
             }
         });
@@ -967,12 +960,7 @@ pub fn ui_pages_manager(state: &mut AppState, ctx: &Context) {
         });
 }
 
-pub fn ui_toolbar(
-    state: &mut AppState,
-    ctx: &Context,
-    window: &Arc<Window>,
-    render_state: &mut RenderState,
-) {
+pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
     if state.screenshot_path.is_some() {
         return;
     }
@@ -1480,7 +1468,7 @@ pub fn ui_toolbar(
             }
 
             if state.current_tool == CanvasTool::Settings {
-                ui_toolbar_settings(state, ctx, ui, window, render_state);
+                ui_toolbar_settings(state, ctx, ui, window);
             }
 
             ui.separator();
