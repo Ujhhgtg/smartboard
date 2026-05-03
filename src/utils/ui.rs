@@ -86,6 +86,16 @@ pub enum PageAction {
     New,
 }
 
+pub fn clear_interaction_state(state: &mut AppState) {
+    state.selected_object_index = None;
+    state.drag_start_pos = None;
+    state.dragged_handle = None;
+    state.drag_move_accumulated_delta = egui::Vec2::ZERO;
+    state.drag_original_transform = None;
+    state.active_strokes.clear();
+    state.is_drawing = false;
+}
+
 pub fn switch_to_page_state(state: &mut AppState, page_index: usize) {
     let old = state.current_page;
     if old != page_index {
@@ -95,13 +105,7 @@ pub fn switch_to_page_state(state: &mut AppState, page_index: usize) {
         std::mem::swap(&mut state.canvas, &mut state.pages[page_index].canvas);
         std::mem::swap(&mut state.history, &mut state.pages[page_index].history);
     }
-    state.selected_object = None;
-    state.drag_start_pos = None;
-    state.dragged_handle = None;
-    state.drag_move_accumulated_delta = egui::Vec2::ZERO;
-    state.drag_original_transform = None;
-    state.active_strokes.clear();
-    state.is_drawing = false;
+    clear_interaction_state(state);
 }
 
 pub fn add_new_page_state(state: &mut AppState) {
@@ -111,13 +115,7 @@ pub fn add_new_page_state(state: &mut AppState) {
     state.pages.push(PageState::default());
     let new_idx = state.pages.len() - 1;
     state.current_page = new_idx;
-    state.selected_object = None;
-    state.drag_start_pos = None;
-    state.dragged_handle = None;
-    state.drag_move_accumulated_delta = egui::Vec2::ZERO;
-    state.drag_original_transform = None;
-    state.active_strokes.clear();
-    state.is_drawing = false;
+    clear_interaction_state(state);
 }
 
 pub fn load_canvas_from_file(state: &mut AppState) {
@@ -132,7 +130,7 @@ pub fn load_canvas_from_file(state: &mut AppState) {
             state.current_page = new_idx;
             state.canvas = page.canvas;
             state.history = page.history;
-            state.selected_object = None;
+            clear_interaction_state(state);
             state.show_welcome_window = false;
             state.toasts.success("成功加载画布!");
         }

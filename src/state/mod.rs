@@ -7,8 +7,11 @@ use egui_notify::Toasts;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 use tray_icon::TrayIcon;
+use wgpu::Backend;
 use wgpu::PresentMode;
 
 #[cfg(feature = "startup_animation")]
@@ -159,8 +162,10 @@ pub struct CanvasImage {
     pub pos: Pos2,
     pub size: egui::Vec2,
     pub aspect_ratio: f32,
-    pub marked_for_deletion: bool, // Deferred deletion to avoid borrow checker issues
     pub rot: f32,
+    pub marked_for_deletion: bool, // Deferred deletion to avoid borrow checker issues
+    pub image_data: Arc<[u8]>,     // RGBA pixel data for export
+    pub image_size: [u32; 2],      // [width, height] of the original image
 }
 
 impl CanvasObjectOps for CanvasImage {
@@ -272,6 +277,7 @@ impl fmt::Debug for CanvasImage {
             .field("size", &self.size)
             .field("aspect_ratio", &self.aspect_ratio)
             .field("marked_for_deletion", &self.marked_for_deletion)
+            .field("image_size", &self.image_size)
             .finish()
     }
 }
@@ -635,6 +641,31 @@ pub enum OptimizationPolicy {
     ResourceUsage,
 }
 
+/// Graphics API backend selection
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum GraphicsApi {
+    #[default]
+    Auto,
+    Vulkan,
+    Dx12,
+    Metal,
+    WebGpu,
+    Gl,
+}
+
+impl GraphicsApi {
+    pub fn to_backends(self) -> wgpu::Backends {
+        match self {
+            GraphicsApi::Auto => wgpu::Backends::all(),
+            GraphicsApi::Vulkan => wgpu::Backends::VULKAN,
+            GraphicsApi::Dx12 => wgpu::Backends::DX12,
+            GraphicsApi::Metal => wgpu::Backends::METAL,
+            GraphicsApi::WebGpu => wgpu::Backends::BROWSER_WEBGPU,
+            GraphicsApi::Gl => wgpu::Backends::GL,
+        }
+    }
+}
+
 /// Represents the current state of the canvas including all objects
 #[derive(Debug, Clone, Default)]
 pub struct CanvasState {
@@ -728,6 +759,8 @@ pub struct PersistentState {
     #[serde(default)]
     pub optimization_policy: OptimizationPolicy,
     #[serde(default)]
+    pub graphics_api: GraphicsApi,
+    #[serde(default)]
     pub low_latency_mode: bool,
     #[serde(default)]
     pub force_redraw_every_frame: bool,
@@ -761,6 +794,7 @@ impl Default for PersistentState {
             window_mode: WindowMode::default(),
             present_mode: PresentMode::AutoVsync,
             optimization_policy: OptimizationPolicy::default(),
+            graphics_api: GraphicsApi::default(),
             low_latency_mode: false,
             force_redraw_every_frame: false,
 
@@ -1426,7 +1460,7 @@ pub struct AppState {
     pub dynamic_brush_width_mode: DynamicBrushWidthMode, // 动态画笔大小微调
     pub current_tool: CanvasTool,                   // 当前工具
     pub eraser_size: f32,                           // 橡皮擦大小
-    pub selected_object: Option<usize>,             // 选中的对象索引
+    pub selected_object_index: Option<usize>,       // 选中的对象索引
     pub drag_start_pos: Option<Pos2>,               // 拖拽开始位置
     pub dragged_handle: Option<TransformHandle>,    // 正在拖拽的调整句柄
     pub drag_move_accumulated_delta: egui::Vec2,    // 移动拖拽累计位移
@@ -1453,6 +1487,12 @@ pub struct AppState {
     pub touch_used: bool, // 标志当前帧是否已由触控处理，防止鼠标代码重复处理
     pub show_touch_points: bool, // 是否显示触控点，用于调试
 
+    // screenshot states
+    pub screenshot_path: Option<PathBuf>,
+
+    // cached states
+    pub active_backend: Option<Backend>,
+
     #[cfg(target_os = "windows")]
     pub show_console: bool, // 是否显示控制台 [仅 Windows]
     #[cfg(feature = "startup_animation")]
@@ -1477,7 +1517,7 @@ impl Default for AppState {
             dynamic_brush_width_mode: DynamicBrushWidthMode::default(),
             current_tool: CanvasTool::Brush,
             eraser_size: 10.0,
-            selected_object: None,
+            selected_object_index: None,
             drag_start_pos: None,
             dragged_handle: None,
             drag_move_accumulated_delta: egui::Vec2::ZERO,
@@ -1498,11 +1538,13 @@ impl Default for AppState {
             show_welcome_window: true,
             show_page_management_window: false,
             persistent: PersistentState::load_from_file(),
+            screenshot_path: None,
             toasts: Toasts::default()
                 .with_anchor(egui_notify::Anchor::BottomRight)
                 .with_margin(egui::vec2(20.0, 20.0)),
             history: History::default(),
             tray: None,
+            active_backend: None,
             #[cfg(target_os = "windows")]
             show_console: false,
             #[cfg(feature = "startup_animation")]

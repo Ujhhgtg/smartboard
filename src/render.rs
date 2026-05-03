@@ -5,6 +5,7 @@ use egui_wgpu::wgpu::{CommandEncoder, Device, Queue, StoreOp, TextureFormat, Tex
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use egui_winit::State;
 use std::sync::Arc;
+use wgpu::TextureUsages;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
@@ -66,7 +67,7 @@ impl RenderState {
             .expect("failed to select proper surface texture format");
 
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
             format: *swapchain_format,
             width,
             height,
@@ -172,10 +173,6 @@ impl EguiRenderer {
         ctx.set_fonts(fonts);
     }
 
-    // pub fn handle_input(&mut self, window: &Window, event: &WindowEvent) {
-    //     let _ = self.state.on_window_event(window, event);
-    // }
-    // Update UI reactively
     pub fn handle_input(&mut self, window: &Window, event: &WindowEvent) -> bool {
         self.state.on_window_event(window, event).repaint
     }
@@ -200,7 +197,7 @@ impl EguiRenderer {
         screen_descriptor: ScreenDescriptor,
     ) {
         if !self.frame_started {
-            panic!("begin_frame must be called before end_frame_and_draw can be called");
+            panic!("begin_frame must be called before end_frame_and_draw is called");
         }
 
         self.ppp(screen_descriptor.pixels_per_point);

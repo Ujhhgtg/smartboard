@@ -1,22 +1,23 @@
 use std::sync::Arc;
 
 use egui::{Color32, Context, Pos2, Stroke, Ui};
-use wgpu::PresentMode;
+use wgpu::{Backend, PresentMode};
 use winit::window::Window;
 
 use crate::{
     render::RenderState,
     state::{
         AppState, CanvasImage, CanvasObject, CanvasObjectOps, CanvasShape, CanvasShapeType,
-        CanvasStroke, CanvasText, CanvasTool, DynamicBrushWidthMode, OptimizationPolicy, PageState,
-        PersistentState, StrokeWidth, ThemeMode, WindowMode,
+        CanvasStroke, CanvasText, CanvasTool, DynamicBrushWidthMode, GraphicsApi,
+        OptimizationPolicy, PageState, PersistentState, StrokeWidth, ThemeMode, WindowMode,
     },
     utils::{
         self,
         stroke::{brush_stroke_add_point, brush_stroke_end, brush_stroke_start},
         ui::{
             PageAction, add_new_page_state, apply_present_mode, apply_theme_mode_and_canvas_color,
-            apply_window_mode, load_canvas_from_file, save_canvas_to_file, switch_to_page_state,
+            apply_window_mode, clear_interaction_state, load_canvas_from_file, save_canvas_to_file,
+            switch_to_page_state,
         },
     },
 };
@@ -32,16 +33,6 @@ pub fn ui_welcome(state: &mut AppState, ctx: &Context) {
         .pivot(egui::Align2::CENTER_CENTER)
         .current_pos(center_pos)
         .order(egui::Order::Foreground)
-        .enabled({
-            #[cfg(feature = "startup_animation")]
-            if let Some(anim) = &state.startup_animation {
-                anim.is_finished()
-            } else {
-                true
-            }
-            #[cfg(not(feature = "startup_animation"))]
-            true
-        })
         .show(ctx, |ui| {
             ui.heading("欢迎使用 smartboard");
             ui.separator();
@@ -51,7 +42,8 @@ pub fn ui_welcome(state: &mut AppState, ctx: &Context) {
             ui.label("• 使用各种工具进行编辑");
             ui.label("• 插入图片、文本和形状");
             ui.label("• 自定义画板设置");
-            ui.label("• 保存和加载画布到文件");
+            ui.label("• 保存与加载画布以保存你的工作");
+            ui.label("• 导出画布为图片");
             ui.label("• 享受超快的启动速度与超高的流畅度");
             ui.separator();
 
@@ -61,7 +53,7 @@ pub fn ui_welcome(state: &mut AppState, ctx: &Context) {
                 state.current_page = 0;
                 state.canvas = default_page.canvas;
                 state.history = default_page.history;
-                state.selected_object = None;
+                clear_interaction_state(state);
                 state.show_welcome_window = false;
             }
             if ui.button("加载画布").clicked() {
@@ -167,6 +159,19 @@ pub fn ui_toolbar_settings(
             }
             if ui.button("保存").clicked() {
                 save_canvas_to_file(&mut state.toasts, &state.canvas);
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("画布转换:");
+            if ui.button("导出为图片").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("画布文件", IMAGE_FILE_EXTS)
+                    .set_file_name("canvas.bmp")
+                    .save_file()
+                {
+                    state.screenshot_path = Some(path);
+                }
             }
         });
 
@@ -424,6 +429,61 @@ pub fn ui_toolbar_settings(
             );
         });
 
+        let current_backend = state.active_backend.unwrap_or(Backend::Noop);
+        ui.horizontal(|ui| {
+            ui.label("图形 API [需重启以应用]:");
+            ui.selectable_value(
+                &mut state.persistent.graphics_api,
+                GraphicsApi::Auto,
+                "自动",
+            );
+            ui.selectable_value(
+                &mut state.persistent.graphics_api,
+                GraphicsApi::Vulkan,
+                if current_backend == Backend::Vulkan {
+                    "Vulkan (当前)"
+                } else {
+                    "Vulkan"
+                },
+            );
+            ui.selectable_value(
+                &mut state.persistent.graphics_api,
+                GraphicsApi::Dx12,
+                if current_backend == Backend::Dx12 {
+                    "Dx12 (当前)"
+                } else {
+                    "Dx12"
+                },
+            );
+            ui.selectable_value(
+                &mut state.persistent.graphics_api,
+                GraphicsApi::Metal,
+                if current_backend == Backend::Metal {
+                    "Metal (当前)"
+                } else {
+                    "Metal"
+                },
+            );
+            ui.selectable_value(
+                &mut state.persistent.graphics_api,
+                GraphicsApi::WebGpu,
+                if current_backend == Backend::BrowserWebGpu {
+                    "WebGPU (当前)"
+                } else {
+                    "WebGPU"
+                },
+            );
+            ui.selectable_value(
+                &mut state.persistent.graphics_api,
+                GraphicsApi::Gl,
+                if current_backend == Backend::Gl {
+                    "Gl (当前)"
+                } else {
+                    "Gl"
+                },
+            );
+        });
+
         ui.horizontal(|ui| {
             ui.label("强制每帧重绘:");
             ui.checkbox(&mut state.persistent.force_redraw_every_frame, "");
@@ -523,6 +583,7 @@ pub fn ui_toolbar_settings(
         ui.horizontal(|ui| {
             ui.label("重置设置:");
             if ui.button("OK").clicked() {
+                clear_interaction_state(state);
                 state.persistent = PersistentState::default();
                 apply_theme_mode_and_canvas_color(
                     ctx,
@@ -545,6 +606,7 @@ pub fn ui_history(state: &mut AppState, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label("历史记录:");
         if ui.button("撤销").clicked() {
+            state.selected_object_index = None; // prevent selecting phantom object
             if state.history.undo(&mut state.canvas) {
                 state.toasts.success("成功撤销操作!");
             } else {
@@ -559,6 +621,7 @@ pub fn ui_history(state: &mut AppState, ui: &mut Ui) {
             })
             .clicked()
         {
+            state.selected_object_index = None; // prevent selecting phantom object
             if state.history.redo(&mut state.canvas) {
                 state.toasts.success("成功重做操作!");
             } else {
@@ -585,20 +648,15 @@ pub fn ui_window_controls(state: &mut AppState, ui: &mut Ui, window: &Arc<Window
 }
 
 pub fn ui_pages_nav(state: &mut AppState, ctx: &Context) {
+    if state.screenshot_path.is_some() {
+        return;
+    }
+
     let content_rect = ctx.content_rect();
     let margin = 8.0;
     let total_pages = state.pages.len();
     let current = state.current_page;
-    let enabled = !state.show_welcome_window && {
-        #[cfg(feature = "startup_animation")]
-        if let Some(anim) = &state.startup_animation {
-            anim.is_finished()
-        } else {
-            true
-        }
-        #[cfg(not(feature = "startup_animation"))]
-        true
-    };
+    let enabled = !state.show_welcome_window;
 
     if enabled {
         let mut action = PageAction::None;
@@ -904,13 +962,7 @@ pub fn ui_pages_manager(state: &mut AppState, ctx: &Context) {
                 let cur = state.current_page;
                 std::mem::swap(&mut state.canvas, &mut state.pages[cur].canvas);
                 std::mem::swap(&mut state.history, &mut state.pages[cur].history);
-                state.selected_object = None;
-                state.drag_start_pos = None;
-                state.dragged_handle = None;
-                state.drag_move_accumulated_delta = egui::Vec2::ZERO;
-                state.drag_original_transform = None;
-                state.active_strokes.clear();
-                state.is_drawing = false;
+                clear_interaction_state(state);
             }
         });
 }
@@ -921,23 +973,16 @@ pub fn ui_toolbar(
     window: &Arc<Window>,
     render_state: &mut RenderState,
 ) {
+    if state.screenshot_path.is_some() {
+        return;
+    }
+
     let content_rect = ctx.content_rect();
     egui::Window::new("工具栏")
         .resizable(false)
         .pivot(egui::Align2::CENTER_BOTTOM)
         .default_pos([content_rect.center().x, content_rect.max.y - 20.0])
-        .enabled(
-            !state.show_welcome_window && {
-                #[cfg(feature = "startup_animation")]
-                if let Some(anim) = &state.startup_animation {
-                    anim.is_finished()
-                } else {
-                    true
-                }
-                #[cfg(not(feature = "startup_animation"))]
-                true
-            },
-        )
+        .enabled(!state.show_welcome_window)
         .show(ctx, |ui| {
             // 工具选择
             ui.horizontal(|ui| {
@@ -972,7 +1017,7 @@ pub fn ui_toolbar(
                         .changed()
                 {
                     if state.current_tool != old_tool {
-                        state.selected_object = None;
+                        clear_interaction_state(state);
                     }
                 }
             });
@@ -981,93 +1026,85 @@ pub fn ui_toolbar(
 
             // 选择工具相关设置
             if state.current_tool == CanvasTool::Select {
-                if state.selected_object.is_some() {
+                if let Some(selected_idx) = state.selected_object_index {
                     ui.horizontal(|ui| {
                         ui.label("对象操作:");
                         if ui.button("删除").clicked() {
-                            if let Some(selected_idx) = state.selected_object {
-                                // Save state to history before modification
-                                let removed_object = state.canvas.objects.remove(selected_idx);
-                                state
-                                    .history
-                                    .save_remove_object(selected_idx, removed_object);
-                                state.selected_object = None;
-                                state.toasts.success("对象已删除!");
+                            // Save state to history before modification
+                            let removed_object = state.canvas.objects.remove(selected_idx);
+                            state
+                                .history
+                                .save_remove_object(selected_idx, removed_object);
+                            state.selected_object_index = None;
+                            state.toasts.success("对象已删除!");
+                        }
+                        if ui.button("复制").clicked() {
+                            // FIXME: CanvasImage duplication not implemented
+                            if !matches!(state.canvas.objects[selected_idx], CanvasObject::Image(_))
+                            {
+                                let mut clone = state.canvas.objects[selected_idx].clone();
+                                CanvasObject::move_object(&mut clone, egui::vec2(20.0, 20.0));
+                                let index = state.canvas.objects.len();
+                                state.history.save_add_object(index, clone.clone());
+                                state.canvas.objects.push(clone);
+                                state.selected_object_index = Some(index);
+                                state.toasts.success("对象已复制!");
                             }
                         }
                         if ui.button("置顶").clicked() {
-                            if let Some(selected_idx) = state.selected_object {
-                                if selected_idx < state.canvas.objects.len() - 1 {
-                                    // Save state to history before modification
-                                    let object = state.canvas.objects.remove(selected_idx);
-                                    // Actually move the object to the top (end of the array)
-                                    state.canvas.objects.push(object);
-                                    state.history.save_add_object(
-                                        state.canvas.objects.len() - 1,
-                                        state.canvas.objects.last().unwrap().clone(),
-                                    );
-                                    state.selected_object = Some(state.canvas.objects.len() - 1);
-                                    state.toasts.success("对象已移至顶部!");
-                                }
+                            if selected_idx < state.canvas.objects.len() - 1 {
+                                // Save state to history before modification
+                                let object = state.canvas.objects.remove(selected_idx);
+                                // Actually move the object to the top (end of the array)
+                                state.canvas.objects.push(object);
+                                state.history.save_add_object(
+                                    state.canvas.objects.len() - 1,
+                                    state.canvas.objects.last().unwrap().clone(),
+                                );
+                                state.selected_object_index = Some(state.canvas.objects.len() - 1);
+                                state.toasts.success("对象已移至顶部!");
                             }
                         }
                         if ui.button("置底").clicked() {
-                            if let Some(selected_idx) = state.selected_object {
-                                if selected_idx > 0 {
-                                    // Save state to history before modification
-                                    let object = state.canvas.objects.remove(selected_idx);
-                                    // Actually move the object to the bottom (beginning of the array)
-                                    state.canvas.objects.insert(0, object);
-                                    state.history.save_add_object(
-                                        0,
-                                        state.canvas.objects.first().unwrap().clone(),
-                                    );
-                                    state.selected_object = Some(0);
-                                    state.toasts.success("对象已移至底部!");
-                                }
+                            if selected_idx > 0 {
+                                // Save state to history before modification
+                                let object = state.canvas.objects.remove(selected_idx);
+                                // Actually move the object to the bottom (beginning of the array)
+                                state.canvas.objects.insert(0, object);
+                                state.history.save_add_object(
+                                    0,
+                                    state.canvas.objects.first().unwrap().clone(),
+                                );
+                                state.selected_object_index = Some(0);
+                                state.toasts.success("对象已移至底部!");
                             }
                         }
 
-                        // 检查是否选中了文本对象
-                        if let Some(selected_idx) = state.selected_object {
-                            if let Some(CanvasObject::Text(_)) =
-                                state.canvas.objects.get(selected_idx)
-                            {
-                                if ui.button("栅格化").clicked() {
-                                    if let Some(text_obj) =
-                                        state.canvas.objects.get(selected_idx).cloned()
-                                    {
-                                        if let CanvasObject::Text(text) = &text_obj {
-                                            // 转换文本为笔画
-                                            let strokes = crate::utils::rasterize_text(
-                                                text,
-                                                utils::font_bytes(),
-                                            );
+                        if let Some(CanvasObject::Text(text)) =
+                            state.canvas.objects.get(selected_idx).cloned()
+                        {
+                            if ui.button("栅格化").clicked() {
+                                let strokes =
+                                    crate::utils::rasterize_text(&text, utils::font_bytes());
 
-                                            // 删除原文本对象
-                                            state.canvas.objects.remove(selected_idx);
+                                state.canvas.objects.remove(selected_idx);
 
-                                            // FIXME: this might be inefficient
-                                            // Add all new strokes
-                                            for stroke in strokes {
-                                                let stroke_obj = CanvasObject::Stroke(stroke);
-                                                state.canvas.objects.push(stroke_obj.clone());
+                                for stroke in strokes {
+                                    let stroke_obj = CanvasObject::Stroke(stroke);
+                                    state.canvas.objects.push(stroke_obj.clone());
 
-                                                state.history.save_add_object(
-                                                    state.canvas.objects.len() - 1,
-                                                    stroke_obj,
-                                                );
-                                            }
-
-                                            state
-                                                .history
-                                                .save_remove_object(selected_idx, text_obj);
-
-                                            state.selected_object = None;
-                                            state.toasts.success("已转换为笔画!");
-                                        }
-                                    }
+                                    state.history.save_add_object(
+                                        state.canvas.objects.len() - 1,
+                                        stroke_obj,
+                                    );
                                 }
+
+                                state
+                                    .history
+                                    .save_remove_object(selected_idx, CanvasObject::Text(text));
+
+                                state.selected_object_index = None;
+                                state.toasts.success("已转换为笔画!");
                             }
                         }
                     });
@@ -1185,7 +1222,7 @@ pub fn ui_toolbar(
                         state.history.save_clear_objects(old_objects);
                         state.active_strokes.clear();
                         state.is_drawing = false;
-                        state.selected_object = None;
+                        state.selected_object_index = None;
                         state.current_tool = CanvasTool::Brush;
                     }
                 });
@@ -1196,10 +1233,7 @@ pub fn ui_toolbar(
                 ui.horizontal(|ui| {
                     if ui.button("图片").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter(
-                                "图片",
-                                &["png", "jpg", "jpeg", "bmp", "gif", "webp", "ico"],
-                            )
+                            .add_filter("图片", IMAGE_FILE_EXTS)
                             .pick_file()
                         {
                             if let Ok(img) = image::open(path) {
@@ -1234,6 +1268,7 @@ pub fn ui_toolbar(
                                 );
 
                                 // Save state to history before modification
+                                let image_data: Arc<[u8]> = img_rgba.into_raw().into();
                                 let new_image = CanvasImage {
                                     texture,
                                     pos: Pos2::new(100.0, 100.0),
@@ -1241,6 +1276,8 @@ pub fn ui_toolbar(
                                     aspect_ratio,
                                     marked_for_deletion: false,
                                     rot: 0.0,
+                                    image_data,
+                                    image_size: [width, height],
                                 };
                                 let index = state.canvas.objects.len();
                                 state
@@ -1472,7 +1509,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
 
         // 绘制所有对象
         for (i, object) in state.canvas.objects.iter().enumerate() {
-            let selected = state.selected_object == Some(i);
+            let selected = state.selected_object_index == Some(i);
             object.paint(painter, selected);
         }
 
@@ -1574,7 +1611,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                         let mut found_selection = false;
                         for (i, object) in state.canvas.objects.iter().enumerate().rev() {
                             if object.bounding_box().contains(click_pos) {
-                                state.selected_object = Some(i);
+                                state.selected_object_index = Some(i);
                                 found_selection = true;
                                 break;
                             }
@@ -1582,7 +1619,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
 
                         // If no object was clicked, deselect
                         if !found_selection {
-                            state.selected_object = None;
+                            state.selected_object_index = None;
                         }
                     }
                 }
@@ -1595,7 +1632,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                         state.drag_move_accumulated_delta = egui::Vec2::ZERO;
 
                         // Check if we're dragging a resize handle
-                        if let Some(selected_idx) = state.selected_object {
+                        if let Some(selected_idx) = state.selected_object_index {
                             if let Some(object) = state.canvas.objects.get(selected_idx) {
                                 let bbox = object.bounding_box();
                                 if let Some(handle) = utils::get_transform_handle_at_pos(bbox, pos)
@@ -1609,13 +1646,13 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                 }
 
                 // Handle dragging: move or resize the selected object
-                if response.dragged() && state.selected_object.is_some() {
+                if response.dragged() && state.selected_object_index.is_some() {
                     if let (Some(drag_start), Some(current_pos)) =
                         (state.drag_start_pos, pointer_pos)
                     {
                         let delta = current_pos - drag_start;
 
-                        if let Some(selected_idx) = state.selected_object {
+                        if let Some(selected_idx) = state.selected_object_index {
                             if let Some(dragged_handle) = state.dragged_handle {
                                 // Resize operation — history saved on drag_stopped
                                 if let Some(object) = state.canvas.objects.get_mut(selected_idx) {
@@ -1643,7 +1680,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                 // Handle drag stop: save move/resize to history and clear state
                 if response.drag_stopped() {
                     if state.drag_move_accumulated_delta != egui::Vec2::ZERO {
-                        if let Some(selected_idx) = state.selected_object {
+                        if let Some(selected_idx) = state.selected_object_index {
                             state.history.save_move_object(
                                 selected_idx,
                                 -state.drag_move_accumulated_delta,
@@ -1651,7 +1688,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                             );
                         }
                     } else if let Some(original_transform) = state.drag_original_transform.take() {
-                        if let Some(selected_idx) = state.selected_object {
+                        if let Some(selected_idx) = state.selected_object_index {
                             if let Some(object) = state.canvas.objects.get(selected_idx) {
                                 let new_transform = object.get_transform();
                                 state.history.save_transform_object(
@@ -1890,3 +1927,5 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
         }
     });
 }
+
+const IMAGE_FILE_EXTS: &[&str; 6] = &["png", "jpg", "jpeg", "bmp", "webp", "ico"];

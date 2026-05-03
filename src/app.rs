@@ -1,5 +1,7 @@
 use crate::assets::ICON;
 use crate::render::RenderState;
+#[cfg(feature = "startup_animation")]
+use crate::state::StartupAnimation;
 use crate::state::{AppState, CanvasObject, CanvasTool};
 use crate::utils::stroke::{brush_stroke_add_point, brush_stroke_end, brush_stroke_start};
 use crate::utils::ui::{apply_theme_mode_and_canvas_color, apply_window_mode};
@@ -10,15 +12,13 @@ use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
 use tray_icon::TrayIconBuilder;
-use wgpu::CurrentSurfaceTexture;
+use wgpu::TexelCopyTextureInfo;
+use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
-
-#[cfg(feature = "startup_animation")]
-use crate::state::StartupAnimation;
 
 pub struct App {
     gpu_instance: wgpu::Instance,
@@ -29,8 +29,14 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let gpu_instance = egui_wgpu::wgpu::Instance::default();
         let mut state = AppState::default();
+        let gpu_instance = egui_wgpu::wgpu::Instance::new(InstanceDescriptor {
+            backends: state.persistent.graphics_api.to_backends(),
+            flags: Default::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+            display: None,
+        });
 
         if !state.persistent.show_welcome_window_on_start {
             state.show_welcome_window = false
@@ -121,6 +127,8 @@ error: failed to get monitor
         )
         .await;
 
+        self.state.active_backend = Some(state.device.adapter_info().backend);
+
         let ctx = state.egui_renderer.context();
 
         // 设置主题模式
@@ -197,8 +205,6 @@ error: failed to get monitor
 
         render_state.egui_renderer.begin_frame(window);
 
-        // fix a borrow checker error
-        // egui::Context is merely an Arc, and cloning is cheap
         let ctx = &(render_state.egui_renderer.context().clone());
 
         #[cfg(feature = "startup_animation")]
@@ -211,6 +217,9 @@ error: failed to get monitor
         }
 
         self.state.toasts.show(ctx);
+
+        // access this value in next redraw before ui to ensure that all ui has become invisible
+        let screenshot_path = self.state.screenshot_path.clone();
 
         // --- ui ---
 
@@ -230,6 +239,7 @@ error: failed to get monitor
 
         // --- end ui
 
+        // egui render pass
         render_state.egui_renderer.end_frame_and_draw(
             &render_state.device,
             &render_state.queue,
@@ -239,7 +249,104 @@ error: failed to get monitor
             screen_descriptor,
         );
 
-        render_state.queue.submit(Some(encoder.finish()));
+        // submit & present texture
+        if let Some(path) = screenshot_path {
+            let width = render_state.surface_config.width;
+            let height = render_state.surface_config.height;
+
+            let bytes_per_pixel = 4;
+            let unpadded_bytes_per_row = width * bytes_per_pixel;
+
+            // wgpu requires 256-byte alignment
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+
+            let buffer_size = (padded_bytes_per_row * height) as u64;
+
+            let output_buffer = render_state.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("screenshot buffer"),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            encoder.copy_texture_to_buffer(
+                TexelCopyTextureInfo {
+                    texture: &surface_texture.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                TexelCopyBufferInfo {
+                    buffer: &output_buffer,
+                    layout: TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded_bytes_per_row),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            render_state.queue.submit(Some(encoder.finish()));
+
+            let buffer_slice = output_buffer.slice(..);
+
+            buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+
+            // ensure gpu work is done
+            let _ = render_state.device.poll(wgpu::wgt::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+
+            let data = buffer_slice.get_mapped_range();
+
+            let mut pixels = vec![0u8; (width * height * 4) as usize];
+
+            for y in 0..height as usize {
+                let src_offset = y * padded_bytes_per_row as usize;
+                let dst_offset = y * unpadded_bytes_per_row as usize;
+
+                pixels[dst_offset..dst_offset + unpadded_bytes_per_row as usize].copy_from_slice(
+                    &data[src_offset..src_offset + unpadded_bytes_per_row as usize],
+                );
+            }
+
+            // pixels
+            //     .chunks_exact(width as usize * 4)
+            //     .collect::<Vec<_>>()
+            //     .into_iter()
+            //     .rev()
+            //     .flatten()
+            //     .copied()
+            //     .collect::<Vec<u8>>();
+
+            for chunk in pixels.chunks_exact_mut(4) {
+                chunk.swap(0, 2); // B ↔ R
+            }
+
+            match image::save_buffer(path, &pixels, width, height, image::ColorType::Rgba8) {
+                Ok(_) => {
+                    self.state.toasts.success("成功导出为图片!");
+                }
+                Err(err) => {
+                    self.state.toasts.error(format!("画布导出失败: {}!", err));
+                }
+            }
+
+            drop(data);
+            output_buffer.unmap();
+
+            self.state.screenshot_path = None;
+        } else {
+            render_state.queue.submit(Some(encoder.finish()));
+        }
+
         surface_texture.present();
 
         self.state.canvas.objects.retain(|obj| {

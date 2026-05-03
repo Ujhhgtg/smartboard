@@ -11,6 +11,7 @@ use std::backtrace::Backtrace;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 
+#[cfg(not(target_os = "android"))]
 fn main() {
     #[cfg(target_os = "linux")]
     utils::linux::silence_glib_logs();
@@ -38,17 +39,15 @@ fn main() {
     "
     );
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        pollster::block_on(run());
-    }
+    pollster::block_on(run_desktop());
 }
 
 enum UserEvent {
     TrayIconEvent(tray_icon::TrayIconEvent),
 }
 
-async fn run() {
+#[cfg(not(target_os = "android"))]
+async fn run_desktop() {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
     let proxy = event_loop.create_proxy();
     tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
