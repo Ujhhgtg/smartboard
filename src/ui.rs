@@ -68,8 +68,92 @@ pub fn ui_welcome(state: &mut AppState, ctx: &Context) {
         });
 }
 
+fn collapsing(ui: &mut Ui, section_id: &str, label: &str, add_body: impl FnOnce(&mut Ui)) {
+    let id = ui.id().with(section_id);
+    const ACTIVE_KEY: &str = "##toolbar_active";
+
+    let active_value: u64 = ui
+        .ctx()
+        .data_mut(|d| d.get_persisted(egui::Id::new(ACTIVE_KEY)))
+        .unwrap_or(u64::MAX);
+    let section_value = id.value();
+
+    let mut cs =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let was_open = cs.is_open();
+
+    if active_value != u64::MAX && active_value != section_value && was_open {
+        cs.set_open(false);
+        cs.store(ui.ctx());
+    }
+
+    let header_response;
+    {
+        let cs = &mut cs;
+        let inner = ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let toggle_resp =
+                cs.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+
+            let (label_rect, label_resp) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                egui::Sense::click(),
+            );
+            let text_color = if label_resp.hovered() {
+                ui.style().visuals.widgets.active.text_color()
+            } else {
+                ui.style().visuals.widgets.noninteractive.text_color()
+            };
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(label_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(label).color(text_color))
+                            .selectable(false),
+                    );
+                },
+            );
+
+            if label_resp.clicked() && !toggle_resp.clicked() {
+                cs.toggle(ui);
+                cs.store(ui.ctx());
+            }
+
+            toggle_resp
+        });
+        header_response = inner.response;
+    }
+
+    cs.show_body_indented(&header_response, ui, |ui| add_body(ui));
+
+    let now_open =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+            .is_open();
+
+    if now_open && !was_open {
+        if active_value != u64::MAX && active_value != section_value {
+            let mut prev_cs = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                egui::Id::new(active_value),
+                false,
+            );
+            prev_cs.set_open(false);
+            prev_cs.store(ui.ctx());
+        }
+        ui.ctx()
+            .data_mut(|d| d.insert_persisted(egui::Id::new(ACTIVE_KEY), section_value));
+    } else if !now_open && was_open {
+        if active_value == section_value {
+            ui.ctx()
+                .data_mut(|d| d.insert_persisted(egui::Id::new(ACTIVE_KEY), u64::MAX));
+        }
+    }
+}
+
 pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, window: &Arc<Window>) {
-    ui.collapsing("外观", |ui| {
+    collapsing(ui, "appearance", "外观", |ui| {
         ui.horizontal(|ui| {
             ui.label("画布颜色:");
             if ui
@@ -144,7 +228,7 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
         });
     });
 
-    ui.collapsing("绘制", |ui| {
+    collapsing(ui, "drawing", "绘制", |ui| {
         ui.horizontal(|ui| {
             ui.label("画布持久化:");
             if ui.button("加载").clicked() {
@@ -284,7 +368,7 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
         }
     });
 
-    ui.collapsing("性能", |ui| {
+    collapsing(ui, "performance", "性能", |ui| {
         ui.horizontal(|ui| {
             ui.label("窗口模式:");
             if ui
@@ -483,7 +567,7 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
         });
     });
 
-    ui.collapsing("调试", |ui| {
+    collapsing(ui, "debug", "调试", |ui| {
         ui.horizontal(|ui| {
             ui.label("引发异常:");
             if ui.button("OK").clicked() {
@@ -592,6 +676,12 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
             ui.label("???:");
             ui.checkbox(&mut state.persistent.easter_egg_redo, "");
         });
+    });
+
+    collapsing(ui, "about", "关于", |ui| {
+        ui.label(env!("CARGO_PKG_NAME"));
+        ui.label(format!("版本: {}", env!("CARGO_PKG_VERSION")));
+        ui.label(format!("作者: {}", env!("CARGO_PKG_AUTHORS")));
     });
 }
 

@@ -2952,7 +2952,7 @@ dependencies = [
 
 [[package]]
 name = "smartboard"
-version = "0.1.0-rc.5"
+version = "0.1.0"
 dependencies = [
  "dirs",
  "egui",

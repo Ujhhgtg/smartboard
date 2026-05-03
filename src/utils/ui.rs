@@ -18,19 +18,18 @@ pub fn apply_theme_mode_and_canvas_color(
     };
 
     if is_dark {
-        let bg_color = Visuals::dark().window_fill;
-
+        // let bg_color = Visuals::dark().window_fill;
         ctx.set_visuals(Visuals {
-            panel_fill: canvas_color,   // for canvas
-            extreme_bg_color: bg_color, // for scroll area
+            panel_fill: canvas_color, // for canvas
+            // extreme_bg_color: bg_color, // for scroll area
             dark_mode: true,
             ..Visuals::dark()
         });
     } else {
-        let bg_color = Visuals::light().window_fill;
+        // let bg_color = Visuals::light().window_fill;
         ctx.set_visuals(Visuals {
-            panel_fill: canvas_color,   // for canvas
-            extreme_bg_color: bg_color, // for scroll area
+            panel_fill: canvas_color, // for canvas
+            // extreme_bg_color: bg_color, // for scroll area
             dark_mode: false,
             ..Visuals::light()
         });

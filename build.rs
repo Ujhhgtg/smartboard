@@ -30,10 +30,7 @@ fn main() {
 
         let mut code = String::from("pub const STARTUP_FRAMES: &[&[u8]] = &[\n");
         for path in entries {
-            code.push_str(&format!(
-                "    include_bytes!(r\"{}\"),\n",
-                path.display()
-            ));
+            code.push_str(&format!("    include_bytes!(r\"{}\"),\n", path.display()));
         }
         code.push_str("];\n");
 
