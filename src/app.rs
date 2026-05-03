@@ -258,8 +258,8 @@ error: failed to get monitor
             let unpadded_bytes_per_row = width * bytes_per_pixel;
 
             // wgpu requires 256-byte alignment
-            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-            let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align);
+            const ALIGN: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(ALIGN) * ALIGN;
 
             let buffer_size = (padded_bytes_per_row * height) as u64;
 

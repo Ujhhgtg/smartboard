@@ -1,5 +1,3 @@
-#![windows_subsystem = "windows"] // hide console window on Windows in release
-
 mod app;
 mod assets;
 mod render;

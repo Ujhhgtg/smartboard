@@ -72,7 +72,7 @@ impl RenderState {
             width,
             height,
             present_mode,
-            desired_maximum_frame_latency: 0,
+            desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
         };
