@@ -1906,7 +1906,12 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                     for object in &state.canvas.objects {
                         if let CanvasObject::Stroke(stroke) = object {
                             if stroke.points.len() < 2 {
-                                new_strokes.push(stroke.clone());
+                                let single_point = stroke.points[0];
+                                let dist = pos.distance(single_point);
+                                if dist > eraser_radius + stroke.width.first() / 2.0 {
+                                    new_strokes.push(stroke.clone());
+                                }
+                                strokes_modified = true;
                                 continue;
                             }
 

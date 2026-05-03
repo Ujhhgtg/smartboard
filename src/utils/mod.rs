@@ -20,6 +20,10 @@ use crate::state::{CanvasStroke, DynamicBrushWidthMode, StrokeWidth, TransformHa
 // 检查点是否与笔画相交（用于对象橡皮擦）
 pub fn point_intersects_stroke(pos: Pos2, stroke: &CanvasStroke, eraser_size: f32) -> bool {
     let eraser_radius = eraser_size / 2.0;
+    if stroke.points.len() == 1 {
+        let dist = pos.distance(stroke.points[0]);
+        return dist <= eraser_radius + stroke.width.first() / 2.0;
+    }
     for i in 0..stroke.points.len() - 1 {
         let p1 = stroke.points[i];
         let p2 = stroke.points[i + 1];
