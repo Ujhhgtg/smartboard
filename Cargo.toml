@@ -1,10 +1,10 @@
 [package]
-name = "smartboard"
+name = "uwu"
 description = "A powerful digital whiteboard built with Rust, winit, egui, and wgpu."
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 authors = ["Fey Xie <feyxiexzf@gmail.com>"]
 edition = "2024"
-repository = "https://github.com/Ujhhgtg/smartboard/"
+repository = "https://github.com/Ujhhgtg/uwu/"
 license-file = "LICENSE"
 
 [features]

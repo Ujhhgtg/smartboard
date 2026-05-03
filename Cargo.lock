@@ -2951,35 +2951,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "smartboard"
-version = "0.2.0-alpha.1"
-dependencies = [
- "dirs",
- "egui",
- "egui-notify",
- "egui-wgpu",
- "egui-winit",
- "fontdb",
- "glib 0.22.7",
- "image",
- "pollster",
- "rfd",
- "rkyv",
- "rodio",
- "serde",
- "serde_json",
- "shellexpand",
- "tray-icon",
- "ttf-parser",
- "wgpu",
- "windows",
- "windows-core",
- "winit",
- "winreg",
- "winres",
-]
-
-[[package]]
 name = "smithay-client-toolkit"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3398,6 +3369,35 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "uwu"
+version = "0.2.0-alpha.2"
+dependencies = [
+ "dirs",
+ "egui",
+ "egui-notify",
+ "egui-wgpu",
+ "egui-winit",
+ "fontdb",
+ "glib 0.22.7",
+ "image",
+ "pollster",
+ "rfd",
+ "rkyv",
+ "rodio",
+ "serde",
+ "serde_json",
+ "shellexpand",
+ "tray-icon",
+ "ttf-parser",
+ "wgpu",
+ "windows",
+ "windows-core",
+ "winit",
+ "winreg",
+ "winres",
 ]
 
 [[package]]

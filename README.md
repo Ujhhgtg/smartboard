@@ -1,4 +1,4 @@
-# smartboard
+# uwu - ujhhgtg's whiteboard, unleashed
 
 a high-performance whiteboard app written in rust
 

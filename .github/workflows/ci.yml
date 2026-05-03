@@ -76,12 +76,12 @@ jobs:
               uses: actions/upload-artifact@v6
               with:
                   name: debug-${{ matrix.name }}
-                  path: target/debug/smartboard*
+                  path: target/debug/uwu*
                   if-no-files-found: error
 
             - name: Upload release artifacts
               uses: actions/upload-artifact@v6
               with:
                   name: release-${{ matrix.name }}
-                  path: target/release/smartboard*
+                  path: target/release/uwu*
                   if-no-files-found: error

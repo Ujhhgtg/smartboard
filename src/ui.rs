@@ -34,7 +34,7 @@ pub fn ui_welcome(state: &mut AppState, ctx: &Context) {
         .current_pos(center_pos)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            ui.heading("欢迎使用 smartboard");
+            ui.heading("欢迎使用 uwu");
             ui.separator();
 
             ui.label("这是一个功能强大的数字画板应用，您可以：");
@@ -585,30 +585,6 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
             ui.label("显示触控点:");
             ui.checkbox(&mut state.show_touch_points, "");
         });
-
-        #[cfg(target_os = "windows")]
-        {
-            ui.horizontal(|ui| {
-                ui.label("显示终端 [仅 Windows]:");
-                let old_show_console = state.show_console;
-                if ui.checkbox(&mut state.show_console, "").changed() {
-                    use windows::Win32::System::Console::AllocConsole;
-                    use windows::Win32::System::Console::FreeConsole;
-
-                    if state.show_console && !old_show_console {
-                        // 启用控制台
-                        unsafe {
-                            let _ = AllocConsole();
-                        }
-                    } else if !state.show_console && old_show_console {
-                        // 禁用控制台
-                        unsafe {
-                            let _ = FreeConsole();
-                        }
-                    }
-                }
-            });
-        }
 
         ui.horizontal(|ui| {
             ui.label("压力测试:");

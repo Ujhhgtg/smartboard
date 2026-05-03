@@ -812,7 +812,7 @@ impl PersistentState {
     // 获取设置文件路径
     fn get_settings_path() -> std::path::PathBuf {
         let mut path = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        path.push("smartboard");
+        path.push("uwu");
         std::fs::create_dir_all(&path).ok();
         path.push("settings.json");
         path
@@ -1475,11 +1475,11 @@ pub struct AppState {
     pub pages: Vec<PageState>,                           // 分页
     pub current_page: usize,                             // 当前页码
     pub pointers: HashMap<u64, PointerState>, // 统一指针状态表（鼠标 id=0，触控使用 winit touch id）
-    pub brush_color: Color32,        // 画笔颜色
-    pub brush_width: f32,            // 画笔大小
+    pub brush_color: Color32,                 // 画笔颜色
+    pub brush_width: f32,                     // 画笔大小
     pub dynamic_brush_width_mode: DynamicBrushWidthMode, // 动态画笔大小微调
-    pub current_tool: CanvasTool,    // 当前工具
-    pub eraser_size: f32,            // 橡皮擦大小
+    pub current_tool: CanvasTool,             // 当前工具
+    pub eraser_size: f32,                     // 橡皮擦大小
     pub selected_object_index: Option<usize>, // 选中的对象索引（全局共享）
 
     // persistent states
@@ -1510,8 +1510,6 @@ pub struct AppState {
     // reactive states
     pub present_mode_changed: bool,
 
-    #[cfg(target_os = "windows")]
-    pub show_console: bool, // 是否显示控制台 [仅 Windows]
     #[cfg(feature = "startup_animation")]
     pub startup_animation: Option<StartupAnimation>, // 启动动画
 
@@ -1556,8 +1554,6 @@ impl Default for AppState {
             tray: None,
             active_backend: None,
             present_mode_changed: false,
-            #[cfg(target_os = "windows")]
-            show_console: false,
             #[cfg(feature = "startup_animation")]
             startup_animation: None,
         }

@@ -71,7 +71,7 @@ impl App {
         let (width, height) = icon.dimensions();
 
         // 设置标题
-        window.set_title("smartboard");
+        window.set_title("uwu");
         let winit_icon = Some(
             winit::window::Icon::from_rgba(rgba.clone(), width, height).expect("invalid icon data"),
         );
@@ -103,7 +103,7 @@ error: failed to get monitor
         // 创建托盘图标
         let tray = TrayIconBuilder::new()
             .with_icon(tray_icon::Icon::from_rgba(rgba, width, height).expect("invalid icon data"))
-            .with_tooltip("smartboard")
+            .with_tooltip("uwu")
             .build()
             .unwrap();
         let _ = tray.set_visible(false);
@@ -536,9 +536,7 @@ impl ApplicationHandler<UserEvent> for App {
                             brush_stroke_add_point(&mut self.state, id, pos, false);
                         }
                         CanvasTool::Select => {
-                            if let Some(pointer) =
-                                self.state.pointers.get_mut(&id)
-                            {
+                            if let Some(pointer) = self.state.pointers.get_mut(&id) {
                                 pointer.pos = pos;
 
                                 if let PointerInteraction::Selecting {
@@ -574,9 +572,7 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                         }
                         CanvasTool::ObjectEraser | CanvasTool::PixelEraser => {
-                            if let Some(pointer) =
-                                self.state.pointers.get_mut(&id)
-                            {
+                            if let Some(pointer) = self.state.pointers.get_mut(&id) {
                                 pointer.pos = pos;
                             }
                         }
@@ -587,9 +583,7 @@ impl ApplicationHandler<UserEvent> for App {
                             brush_stroke_end(&mut self.state, id);
                         }
                         CanvasTool::Select => {
-                            if let Some(pointer) =
-                                self.state.pointers.get(&id)
-                            {
+                            if let Some(pointer) = self.state.pointers.get(&id) {
                                 if let PointerInteraction::Selecting {
                                     drag_accumulated_delta,
                                     drag_original_transform,

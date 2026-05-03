@@ -1,6 +1,6 @@
-# AGENTS.md — smartboard
+# uwu (ujhhgtg's whiteboard, unleashed)
 
-A performant digital whiteboard app.
+A high-performance digital whiteboard app, designed for touchscreen devices.
 
 ## Toolchain
 
@@ -27,10 +27,6 @@ cargo clippy --release
 - rkyv serialization states: `src/state/flat.rs`
 - Rendering: `src/render.rs`
 - App logic: `src/app.rs`
-- Utilities: `src/utils/*`
+- Utilities: `src/utils/*.rs`
 - UI content: `src/ui.rs`
 
-## Features
-
-- Wayland enabled (`egui-winit` and `winit` both have `wayland` feature)
-- `wgpu` built with `webgpu` feature
