@@ -19,7 +19,9 @@ egui = { version = "0.34", default-features = false, features = ["serde"] }
 egui-winit = { version = "0.34", default-features = false, features = [
     "wayland",
 ] }
-winit = { version = "0.30", default-features = false, features = ["wayland"] }
+winit = { git = "https://github.com/Ujhhgtg/winit", branch = "win32-transparency-patched", default-features = false, features = [
+    "wayland",
+] }
 egui-wgpu = { version = "0.34", features = ["winit", "wayland"] }
 wgpu = { version = "29", default-features = false, features = [
     "dx12",
@@ -61,6 +63,9 @@ fontdb = { version = "*", optional = true }
 [build-dependencies]
 shellexpand = "*"
 winres = "*"
+
+[patch.crates-io]
+winit = { git = "https://github.com/Ujhhgtg/winit", branch = "win32-transparency-patched" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = { version = "0.22", default-features = false }

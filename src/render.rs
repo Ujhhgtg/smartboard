@@ -58,14 +58,6 @@ impl RenderState {
             .await
             .expect("failed to create device");
 
-        // let swapchain_capabilities = surface.get_capabilities(&adapter);
-        // let selected_format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        // let swapchain_format = swapchain_capabilities
-        //     .formats
-        //     .iter()
-        //     .find(|d| **d == selected_format)
-        //     .expect("failed to select proper surface texture format");
-
         const TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
         let surface_config = wgpu::SurfaceConfiguration {
@@ -75,7 +67,7 @@ impl RenderState {
             height,
             present_mode,
             desired_maximum_frame_latency: 2,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied, // support transparency
             view_formats: vec![TEXTURE_FORMAT],
         };
 
@@ -209,7 +201,7 @@ impl EguiRenderer {
                         r: 0.0_f64,
                         g: 0.0_f64,
                         b: 0.0_f64,
-                        a: 1.0_f64,
+                        a: 0.0_f64,
                     }),
                     store: StoreOp::Store,
                 },

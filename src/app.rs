@@ -14,7 +14,7 @@ use egui::{Pos2, Vec2};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
-use wgpu::TexelCopyTextureInfo;
+use wgpu::{Backends, TexelCopyTextureInfo};
 use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
@@ -33,7 +33,7 @@ impl App {
     pub fn new() -> Self {
         let mut state = AppState::default();
         let gpu_instance = egui_wgpu::wgpu::Instance::new(InstanceDescriptor {
-            backends: state.persistent.graphics_api.to_backends(),
+            backends: /*state.persistent.graphics_api.to_backends()*/ Backends::DX12,
             flags: Default::default(),
             memory_budget_thresholds: Default::default(),
             backend_options: Default::default(),
@@ -64,22 +64,23 @@ impl App {
     pub async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
 
-        let icon = image::load_from_memory(ICON).expect("invalid icon data");
-
-        let rgba = icon.to_rgba8().to_vec();
-        let (width, height) = icon.dimensions();
-
-        // 设置标题
         window.set_title("uwu");
-        let winit_icon = Some(
-            winit::window::Icon::from_rgba(rgba.clone(), width, height).expect("invalid icon data"),
-        );
-        window.set_window_icon(winit_icon.clone());
 
-        #[cfg(target_os = "windows")]
         {
-            use winit::platform::windows::WindowExtWindows;
-            window.set_taskbar_icon(winit_icon);
+            let icon = image::load_from_memory(ICON).expect("invalid icon data");
+            let rgba = icon.to_rgba8().to_vec();
+            let (width, height) = icon.dimensions();
+            let winit_icon = Some(
+                winit::window::Icon::from_rgba(rgba.clone(), width, height)
+                    .expect("invalid icon data"),
+            );
+            window.set_window_icon(winit_icon.clone());
+
+            #[cfg(target_os = "windows")]
+            {
+                use winit::platform::windows::WindowExtWindows;
+                window.set_taskbar_icon(winit_icon);
+            }
         }
 
         // 获取显示模式
@@ -353,7 +354,8 @@ error: failed to get monitor
 impl ApplicationHandler<()> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = event_loop
-            .create_window(Window::default_attributes())
+            // support transparency
+            .create_window(Window::default_attributes().with_transparent(true))
             .unwrap();
         pollster::block_on(self.set_window(window));
         // redraw on window creation

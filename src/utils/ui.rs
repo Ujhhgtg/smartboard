@@ -12,7 +12,7 @@ use crate::{
 pub fn apply_theme_mode_and_canvas_color(
     ctx: &Context,
     theme_mode: ThemeMode,
-    canvas_color: Color32,
+    _canvas_color: Color32,
 ) {
     let is_dark = if theme_mode == ThemeMode::System {
         super::dark_mode::is_dark_mode().unwrap_or(true)
@@ -23,7 +23,7 @@ pub fn apply_theme_mode_and_canvas_color(
     if is_dark {
         // let bg_color = Visuals::dark().window_fill;
         ctx.set_visuals(Visuals {
-            panel_fill: canvas_color, // for canvas
+            panel_fill: Color32::TRANSPARENT,
             // extreme_bg_color: bg_color, // for scroll area; this also affects text input field's bg color, which is unwanted
             dark_mode: true,
             ..Visuals::dark()
@@ -31,7 +31,7 @@ pub fn apply_theme_mode_and_canvas_color(
     } else {
         // let bg_color = Visuals::light().window_fill;
         ctx.set_visuals(Visuals {
-            panel_fill: canvas_color, // for canvas
+            panel_fill: Color32::TRANSPARENT,
             // extreme_bg_color: bg_color, // for scroll area; this also affects text input field's bg color, which is unwanted
             dark_mode: false,
             ..Visuals::light()
