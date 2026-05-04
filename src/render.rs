@@ -75,8 +75,6 @@ impl RenderState {
             view_formats: vec![TEXTURE_FORMAT],
         };
 
-        dbg!(surface.get_capabilities(&adapter));
-
         surface.configure(&device, &surface_config);
 
         let egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);

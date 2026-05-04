@@ -366,50 +366,41 @@ error: failed to enable premultiplied alpha for window: {:?}
 
         surface_texture.present();
 
-        // we have to do the hittest manually, since if cursor passthrough is on, egui can't receive any event
-        // let cursor_pos = utils::ui::winit_cursor_pos_to_egui_pos2(ctx, self.state.cursor_position);
-        // let res = if let Some(rect1) = toolbar_rect
-        //     && let Some((rect2, rect3)) = pages_nav_rects
-        //     && (rect1.contains(cursor_pos)
-        //         || rect2.contains(cursor_pos)
-        //         || rect3.contains(cursor_pos))
-
         // update window passthrough state only once if disabled
-        if self.state.passthrough_mode_changed && !self.state.is_passthrough_mode {
+        if self.state.overlay_mode_changed && !self.state.is_overlay_mode {
             let _ = window.set_cursor_hittest(true);
-            self.state.passthrough_mode_changed = false;
+            self.state.overlay_mode_changed = false;
         }
 
         // update window passthrough state every frame if enabled
-        if self.state.is_passthrough_mode {
-            match cursor_pos::current() {
-                Ok(pos) => {
-                    let cursor_pos = utils::ui::cursor_pos_phys_to_logic(ctx, pos);
-                    let _ = if let Some(mut rect) = toolbar_rect
-                        && {
-                            let win_pos = window
-                                .inner_position()
-                                .unwrap_or_else(|_| PhysicalPosition::<i32>::new(0, 0));
-                            let x = win_pos.x as f32;
-                            let y = win_pos.y as f32;
-                            rect.set_left(rect.left() + x);
-                            rect.set_top(rect.top() + y);
-                            rect.set_right(rect.right() + x);
-                            rect.set_bottom(rect.bottom() + y);
-                            rect.contains(cursor_pos)
-                        } {
-                        window.set_cursor_hittest(true)
-                    } else {
-                        window.set_cursor_hittest(false)
-                    };
+        if self.state.is_overlay_mode {
+            if self.state.current_tool == CanvasTool::Passthrough {
+                match cursor_pos::current() {
+                    Ok(pos) => {
+                        let cursor_pos = utils::ui::cursor_pos_phys_to_logic(ctx, pos);
+                        let _ = if let Some(mut rect) = toolbar_rect
+                            && {
+                                let win_pos = window
+                                    .inner_position()
+                                    .unwrap_or_else(|_| PhysicalPosition::<i32>::new(0, 0));
+                                let x = win_pos.x as f32;
+                                let y = win_pos.y as f32;
+                                rect.set_left(rect.left() + x);
+                                rect.set_top(rect.top() + y);
+                                rect.set_right(rect.right() + x);
+                                rect.set_bottom(rect.bottom() + y);
+                                rect.contains(cursor_pos)
+                            } {
+                            window.set_cursor_hittest(true)
+                        } else {
+                            window.set_cursor_hittest(false)
+                        };
+                    }
+                    Err(err) => eprintln!("failed to get cursor pos: {}", err),
                 }
-                Err(err) => eprintln!("failed to get cursor pos: {}", err),
+            } else {
+                let _ = window.set_cursor_hittest(true);
             }
-        }
-
-        if self.state.present_mode_changed {
-            render_state.set_present_mode(self.state.persistent.present_mode);
-            self.state.present_mode_changed = false;
         }
 
         if self.state.persistent.show_fps {
@@ -453,7 +444,7 @@ impl ApplicationHandler<()> for App {
         // don't pass RedrawRequested to egui's input handler,
         // it's not input and would make egui request a repaint, causing an infinite redraw loop
         if self.state.persistent.force_redraw_every_frame
-            || self.state.is_passthrough_mode // we also need to redraw every frame since we cannot receive any event if passthrough is enabled
+            || self.state.is_overlay_mode // we also need to redraw every frame since we cannot receive any event if passthrough is enabled
             || !matches!(event, WindowEvent::RedrawRequested)
         {
             let egui_needs_repaint = self

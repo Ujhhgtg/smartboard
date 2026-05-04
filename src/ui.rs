@@ -713,13 +713,19 @@ pub fn ui_window_controls(state: &mut AppState, ui: &mut Ui, window: &Arc<Window
         }
 
         ui.horizontal(|ui| {
-            ui.label("穿透模式:");
-            if ui.checkbox(&mut state.is_passthrough_mode, "").changed() {
-                state.passthrough_mode_changed = true;
+            ui.label("悬浮窗模式:");
+            if ui.checkbox(&mut state.is_overlay_mode, "").changed() {
+                state.overlay_mode_changed = true;
+                if state.is_overlay_mode {
+                    state.current_tool = CanvasTool::Passthrough;
+                } else {
+                    state.current_tool = CanvasTool::Brush;
+                }
+                clear_interaction_state(state);
                 utils::ui::apply_theme_mode_and_canvas_color(
                     ui.ctx(),
                     state.persistent.theme_mode,
-                    if state.is_passthrough_mode {
+                    if state.is_overlay_mode {
                         Color32::TRANSPARENT
                     } else {
                         state.persistent.canvas_color
@@ -795,7 +801,7 @@ pub fn ui_window_controls(state: &mut AppState, ui: &mut Ui, window: &Arc<Window
 }
 
 pub fn ui_pages_nav(state: &mut AppState, ctx: &Context) -> Option<(Rect, Rect)> {
-    if state.screenshot_path.is_some() {
+    if state.screenshot_path.is_some() || state.is_overlay_mode {
         return None;
     }
 
@@ -1126,9 +1132,17 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) -> 
                     ui.label("工具:");
                     // TODO: egui doesn't support rendering fonts with colors
                     let old_tool = state.current_tool;
-                    if ui
-                        .selectable_value(&mut state.current_tool, CanvasTool::Select, "选择")
-                        .changed()
+                    if (state.is_overlay_mode
+                        && ui
+                            .selectable_value(
+                                &mut state.current_tool,
+                                CanvasTool::Passthrough,
+                                "穿透",
+                            )
+                            .changed())
+                        || ui
+                            .selectable_value(&mut state.current_tool, CanvasTool::Select, "选择")
+                            .changed()
                         || ui
                             .selectable_value(&mut state.current_tool, CanvasTool::Brush, "画笔")
                             .changed()
@@ -1161,8 +1175,9 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) -> 
 
                 ui.separator();
 
-                // 选择工具相关设置
-                if state.current_tool == CanvasTool::Select {
+                if state.current_tool == CanvasTool::Passthrough {
+                    ui.label(egui::RichText::new("(当前处于穿透模式, 输入将穿透画布)").italics());
+                } else if state.current_tool == CanvasTool::Select {
                     if let Some(selected_idx) = state.selected_object_index {
                         ui.horizontal(|ui| {
                             ui.label("对象操作:");
@@ -1251,10 +1266,7 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) -> 
                     } else {
                         ui.label(egui::RichText::new("(未选中对象)").italics());
                     }
-                }
-
-                // 画笔相关设置
-                if state.current_tool == CanvasTool::Brush {
+                } else if state.current_tool == CanvasTool::Brush {
                     ui.horizontal(|ui| {
                         ui.label("颜色:");
                         let old_color = state.brush_color;
@@ -1350,10 +1362,7 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) -> 
                             state.brush_width = 5.0;
                         }
                     });
-                }
-
-                // 橡皮擦相关设置
-                if state.current_tool == CanvasTool::ObjectEraser
+                } else if state.current_tool == CanvasTool::ObjectEraser
                     || state.current_tool == CanvasTool::PixelEraser
                 {
                     ui.horizontal(|ui| {
@@ -1380,10 +1389,7 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) -> 
                             state.current_tool = CanvasTool::Brush;
                         }
                     });
-                }
-
-                // 插入工具相关设置
-                if state.current_tool == CanvasTool::Insert {
+                } else if state.current_tool == CanvasTool::Insert {
                     ui.horizontal(|ui| {
                         if ui.button("图片").clicked() {
                             if let Some(path) = rfd::FileDialog::new()
@@ -1617,9 +1623,7 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) -> 
                                 });
                             });
                     }
-                }
-
-                if state.current_tool == CanvasTool::Settings {
+                } else if state.current_tool == CanvasTool::Settings {
                     ui_toolbar_settings(state, ctx, ui, window);
                 }
 
@@ -1742,8 +1746,8 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) -> bool {
                 }
             }
 
-            // also we enable cursor passthrough, we still keep this guard
-            if state.is_passthrough_mode {
+            // when mouse passthrough tool is selected, skip canvas interaction
+            if state.is_overlay_mode && state.current_tool == CanvasTool::Passthrough {
                 return;
             }
 
@@ -1756,7 +1760,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) -> bool {
             };
 
             match state.current_tool {
-                CanvasTool::Insert | CanvasTool::Settings => {}
+                CanvasTool::Insert | CanvasTool::Settings | CanvasTool::Passthrough => {}
 
                 CanvasTool::Select => {
                     if !has_touch {

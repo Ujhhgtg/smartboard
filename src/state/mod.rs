@@ -137,6 +137,7 @@ pub enum CanvasTool {
     PixelEraser, // Erase pixel by pixel
     Insert, // Insert images, text, or shapes
     Settings, // Open settings panel
+    Passthrough, // Only available in passthrough mode; passes clicks through to underlying windows
 }
 
 /// Trait for objects that can be rendered on the canvas
@@ -1501,7 +1502,7 @@ pub struct AppState {
     pub new_quick_color: Color32,                 // 新快捷颜色，用于添加
     pub show_touch_points: bool,                  // 是否显示触控点，用于调试
 
-    pub is_passthrough_mode: bool,
+    pub is_overlay_mode: bool,
 
     // screenshot states
     pub screenshot_path: Option<PathBuf>,
@@ -1512,7 +1513,7 @@ pub struct AppState {
 
     // reactive states
     pub present_mode_changed: bool,
-    pub passthrough_mode_changed: bool,
+    pub overlay_mode_changed: bool,
 
     #[cfg(feature = "startup_animation")]
     pub startup_animation: Option<StartupAnimation>, // 启动动画
@@ -1556,8 +1557,8 @@ impl Default for AppState {
             history: History::default(),
             active_backend: None,
             present_mode_changed: false,
-            is_passthrough_mode: false,
-            passthrough_mode_changed: false,
+            is_overlay_mode: false,
+            overlay_mode_changed: false,
             cursor_position: PhysicalPosition {
                 x: 0.0_f64,
                 y: 0.0_f64,
