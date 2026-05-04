@@ -86,15 +86,12 @@ impl App {
         // 获取显示模式
         let monitor = window
             .current_monitor()
-            .or_else(|| window.primary_monitor());
+            .or_else(|| window.primary_monitor())
+            .or_else(|| window.available_monitors().next());
         if let Some(monitor) = monitor {
             self.state.fullscreen_video_modes = monitor.video_modes().collect();
         } else {
-            eprintln!(
-                "
-error: failed to get monitor
-       this is expected behaviour on wayland & web, do not switch to exclusive fullscreen mode"
-            )
+            eprintln!("error: failed to get monitor, exclusive fullscreen mode will be unavailable")
         }
 
         // 设置窗口模式
