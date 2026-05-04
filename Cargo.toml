@@ -1,5 +1,4 @@
 [package]
-
 name = "uwu"
 description = "A powerful digital whiteboard built with Rust, winit, egui, and wgpu."
 version = "0.3.0"

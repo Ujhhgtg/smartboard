@@ -1946,6 +1946,10 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                             }
                         }
                     }
+                    for i in to_remove {
+                        let object = state.canvas.objects.remove(i);
+                        state.history.save_remove_object(i, object);
+                    }
                 }
             }
 
