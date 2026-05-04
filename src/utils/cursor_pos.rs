@@ -59,7 +59,7 @@ mod platform {
     type CGEventRef = *mut c_void;
 
     #[link(name = "ApplicationServices", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         fn CGEventCreate(source: *const c_void) -> CGEventRef;
         fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
         fn CFRelease(cf: *const c_void);
