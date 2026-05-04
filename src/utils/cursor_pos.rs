@@ -32,7 +32,7 @@ mod platform {
     }
 
     #[link(name = "user32")]
-    extern "system" {
+    unsafe extern "system" {
         fn GetPhysicalCursorPos(lpPoint: *mut POINT) -> i32;
     }
 
