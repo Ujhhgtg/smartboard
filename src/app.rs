@@ -16,7 +16,6 @@ use image::GenericImageView;
 use std::sync::Arc;
 use wgpu::{Backends, TexelCopyTextureInfo};
 use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
-use wgpu::{InstanceFlags, TexelCopyTextureInfo};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
@@ -172,6 +171,11 @@ error: failed to enable premultiplied alpha for window: {:?}
 
     fn handle_redraw(&mut self) {
         let render_state = self.render_state.as_mut().unwrap();
+
+        if self.state.present_mode_changed {
+            render_state.set_present_mode(self.state.persistent.present_mode);
+            self.state.present_mode_changed = false;
+        }
 
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [
@@ -483,15 +487,7 @@ impl ApplicationHandler<()> for App {
                 self.handle_redraw();
             }
             WindowEvent::Resized(new_size) => {
-                // TODO: issue #1 is caused by get_current_texture() lagging after surface reconfigure
-                //       although we haven't fix that, we avoid the reconfigure on minimize/resume to prevent that bug from occurring
-                //       when that actual cause is fixed, we can probably remove this guard
-                let surface_config = &self.render_state.as_ref().unwrap().surface_config;
-                if (new_size.width != surface_config.width
-                    || new_size.height != surface_config.height)
-                    && new_size.width > 0
-                    && new_size.height > 0
-                {
+                if new_size.width > 0 && new_size.height > 0 {
                     self.handle_resized(new_size.width, new_size.height);
                     self.window.as_ref().unwrap().request_redraw();
                 }
