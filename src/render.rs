@@ -58,7 +58,7 @@ impl RenderState {
             .await
             .expect("failed to create device");
 
-        const TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+        const TEXTURE_FORMAT: TextureFormat = TextureFormat::Bgra8UnormSrgb;
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,

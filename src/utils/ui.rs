@@ -1,18 +1,19 @@
 use std::sync::Arc;
 
-use egui::{Color32, Context, FontDefinitions, Visuals};
+use egui::{Color32, Context, FontDefinitions, Pos2, Visuals};
 use egui_notify::Toasts;
-use winit::window::{Fullscreen, Window};
+use winit::window::{Fullscreen, Window, WindowLevel};
 
 use crate::{
     assets,
     state::{AppState, CanvasState, PageState, ThemeMode, WindowMode},
+    utils,
 };
 
 pub fn apply_theme_mode_and_canvas_color(
     ctx: &Context,
     theme_mode: ThemeMode,
-    _canvas_color: Color32,
+    canvas_color: Color32,
 ) {
     let is_dark = if theme_mode == ThemeMode::System {
         super::dark_mode::is_dark_mode().unwrap_or(true)
@@ -23,7 +24,7 @@ pub fn apply_theme_mode_and_canvas_color(
     if is_dark {
         // let bg_color = Visuals::dark().window_fill;
         ctx.set_visuals(Visuals {
-            panel_fill: Color32::TRANSPARENT,
+            panel_fill: canvas_color,
             // extreme_bg_color: bg_color, // for scroll area; this also affects text input field's bg color, which is unwanted
             dark_mode: true,
             ..Visuals::dark()
@@ -31,7 +32,7 @@ pub fn apply_theme_mode_and_canvas_color(
     } else {
         // let bg_color = Visuals::light().window_fill;
         ctx.set_visuals(Visuals {
-            panel_fill: Color32::TRANSPARENT,
+            panel_fill: canvas_color,
             // extreme_bg_color: bg_color, // for scroll area; this also affects text input field's bg color, which is unwanted
             dark_mode: false,
             ..Visuals::light()
@@ -44,6 +45,7 @@ pub fn apply_window_mode(state: &mut AppState, window: &Arc<Window>) {
         WindowMode::Windowed => {
             // 窗口化
             window.set_fullscreen(None);
+            window.set_window_level(WindowLevel::Normal);
         }
         WindowMode::ExclusiveFullscreen => {
             // 全屏
@@ -65,10 +67,13 @@ pub fn apply_window_mode(state: &mut AppState, window: &Arc<Window>) {
                     .expect("no video mode available")
                     .clone(),
             )));
+
+            window.set_window_level(WindowLevel::AlwaysOnTop);
         }
         WindowMode::BorderlessFullscreen => {
             // 无边框全屏
             window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
+            window.set_window_level(WindowLevel::AlwaysOnTop);
         }
     }
 }
@@ -149,4 +154,13 @@ pub fn setup_fonts(ctx: &mut Context) {
         .insert(0, font_name.to_owned());
 
     ctx.set_fonts(fonts);
+}
+
+pub fn cursor_pos_phys_to_logic(ctx: &Context, pos: utils::cursor_pos::Point) -> Pos2 {
+    let pixels_per_point = ctx.pixels_per_point();
+
+    egui::pos2(
+        pos.x as f32 / pixels_per_point,
+        pos.y as f32 / pixels_per_point,
+    )
 }

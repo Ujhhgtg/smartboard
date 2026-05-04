@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use wgpu::Backend;
 use wgpu::PresentMode;
+use winit::dpi::PhysicalPosition;
 
 #[cfg(feature = "startup_animation")]
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
@@ -1500,14 +1501,18 @@ pub struct AppState {
     pub new_quick_color: Color32,                 // 新快捷颜色，用于添加
     pub show_touch_points: bool,                  // 是否显示触控点，用于调试
 
+    pub is_passthrough_mode: bool,
+
     // screenshot states
     pub screenshot_path: Option<PathBuf>,
 
     // cached states
     pub active_backend: Option<Backend>,
+    pub cursor_position: PhysicalPosition<f64>,
 
     // reactive states
     pub present_mode_changed: bool,
+    pub passthrough_mode_changed: bool,
 
     #[cfg(feature = "startup_animation")]
     pub startup_animation: Option<StartupAnimation>, // 启动动画
@@ -1551,6 +1556,12 @@ impl Default for AppState {
             history: History::default(),
             active_backend: None,
             present_mode_changed: false,
+            is_passthrough_mode: false,
+            passthrough_mode_changed: false,
+            cursor_position: PhysicalPosition {
+                x: 0.0_f64,
+                y: 0.0_f64,
+            },
             #[cfg(feature = "startup_animation")]
             startup_animation: None,
         }

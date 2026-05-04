@@ -1,3 +1,4 @@
+pub mod cursor_pos;
 pub mod dark_mode;
 pub mod stroke;
 pub mod ui;

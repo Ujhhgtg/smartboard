@@ -6,15 +6,15 @@ use crate::state::{
     AppState, CanvasObject, CanvasObjectOps, CanvasTool, PointerInteraction, PointerState,
 };
 use crate::ui;
-use crate::utils;
 use crate::utils::stroke::{brush_stroke_add_point, brush_stroke_end, brush_stroke_start};
 use crate::utils::ui::{apply_theme_mode_and_canvas_color, apply_window_mode};
+use crate::utils::{self, cursor_pos};
 use core::f32;
 use egui::{Pos2, Vec2};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
-use wgpu::{Backends, TexelCopyTextureInfo};
+use wgpu::TexelCopyTextureInfo;
 use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
@@ -33,7 +33,7 @@ impl App {
     pub fn new() -> Self {
         let mut state = AppState::default();
         let gpu_instance = egui_wgpu::wgpu::Instance::new(InstanceDescriptor {
-            backends: /*state.persistent.graphics_api.to_backends()*/ Backends::DX12,
+            backends: state.persistent.graphics_api.to_backends(),
             flags: Default::default(),
             memory_budget_thresholds: Default::default(),
             backend_options: Default::default(),
@@ -210,14 +210,17 @@ error: failed to get monitor
             ui::ui_welcome(&mut self.state, ctx);
         }
 
-        ui::ui_toolbar(&mut self.state, ctx, window);
+        // let toolbar_rect = ui::ui_toolbar(&mut self.state, ctx, window);
+        let toolbar_rect = ui::ui_toolbar(&mut self.state, ctx, window);
 
+        // let pages_nav_rects = ui::ui_pages_nav(&mut self.state, ctx);
         ui::ui_pages_nav(&mut self.state, ctx);
 
         if self.state.show_page_management_window {
             ui::ui_pages_manager(&mut self.state, ctx);
         }
 
+        /*let canvas_hovered = */
         ui::ui_canvas(&mut self.state, ctx);
 
         // --- end ui
@@ -309,9 +312,9 @@ error: failed to get monitor
             //     .copied()
             //     .collect::<Vec<u8>>();
 
-            // for chunk in pixels.chunks_exact_mut(4) {
-            //     chunk.swap(0, 2); // B ↔ R
-            // }
+            for chunk in pixels.chunks_exact_mut(4) {
+                chunk.swap(0, 2); // B ↔ R
+            }
 
             match image::save_buffer(path, &pixels, width, height, image::ColorType::Rgba8) {
                 Ok(_) => {
@@ -339,6 +342,41 @@ error: failed to get monitor
         });
 
         surface_texture.present();
+
+        // we have to do the hittest manually, since if cursor passthrough is on, egui can't receive any event
+        // let cursor_pos = utils::ui::winit_cursor_pos_to_egui_pos2(ctx, self.state.cursor_position);
+        // let res = if let Some(rect1) = toolbar_rect
+        //     && let Some((rect2, rect3)) = pages_nav_rects
+        //     && (rect1.contains(cursor_pos)
+        //         || rect2.contains(cursor_pos)
+        //         || rect3.contains(cursor_pos))
+
+        // update window passthrough state only once if disabled
+        if self.state.passthrough_mode_changed && !self.state.is_passthrough_mode {
+            let _ = window.set_cursor_hittest(true);
+            self.state.passthrough_mode_changed = false;
+        }
+
+        // update window passthrough state every frame if enabled
+        if self.state.is_passthrough_mode {
+            match cursor_pos::current() {
+                Ok(pos) => {
+                    let cursor_pos = utils::ui::cursor_pos_phys_to_logic(ctx, pos);
+                    println!(
+                        "cursor pos: {:?}, logical pos: {:?}, toolbar rect: {:?}",
+                        pos, cursor_pos, toolbar_rect
+                    );
+                    let _ = if let Some(rect) = toolbar_rect
+                        && rect.contains(cursor_pos)
+                    {
+                        window.set_cursor_hittest(true)
+                    } else {
+                        window.set_cursor_hittest(false)
+                    };
+                }
+                Err(err) => eprintln!("failed to get cursor pos: {}", err),
+            }
+        }
 
         if self.state.present_mode_changed {
             render_state.set_present_mode(self.state.persistent.present_mode);
@@ -386,6 +424,7 @@ impl ApplicationHandler<()> for App {
         // don't pass RedrawRequested to egui's input handler,
         // it's not input and would make egui request a repaint, causing an infinite redraw loop
         if self.state.persistent.force_redraw_every_frame
+            || self.state.is_passthrough_mode // we also need to redraw every frame since we cannot receive any event if passthrough is enabled
             || !matches!(event, WindowEvent::RedrawRequested)
         {
             let egui_needs_repaint = self
@@ -595,6 +634,13 @@ impl ApplicationHandler<()> for App {
                     },
                 }
 
+                self.window.as_ref().unwrap().request_redraw();
+            }
+            WindowEvent::CursorMoved {
+                device_id: _,
+                position,
+            } => {
+                self.state.cursor_position = position;
                 self.window.as_ref().unwrap().request_redraw();
             }
             _ => (),
