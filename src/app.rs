@@ -14,8 +14,11 @@ use egui::{Pos2, Vec2};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
-use wgpu::TexelCopyTextureInfo;
-use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
+use wgpu::{
+    BackendOptions, CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo,
+    TexelCopyBufferLayout,
+};
+use wgpu::{InstanceFlags, TexelCopyTextureInfo};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
@@ -35,9 +38,13 @@ impl App {
         let mut state = AppState::default();
         let gpu_instance = wgpu::Instance::new(InstanceDescriptor {
             backends: state.persistent.graphics_api.to_backends(),
-            flags: Default::default(),
+            flags: InstanceFlags::empty(),
             memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
+            backend_options: {
+                let mut options = BackendOptions::default();
+                options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+                options
+            },
             display: None,
         });
 

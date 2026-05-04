@@ -58,21 +58,15 @@ impl RenderState {
             .await
             .expect("failed to create device");
 
-        const TEXTURE_FORMAT: TextureFormat = TextureFormat::Bgra8UnormSrgb;
-
         let surface_config = wgpu::SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-            format: TEXTURE_FORMAT,
+            format: TextureFormat::Bgra8UnormSrgb,
             width,
             height,
             present_mode,
             desired_maximum_frame_latency: 2,
-            alpha_mode: if cfg!(not(target_os = "windows")) {
-                wgpu::CompositeAlphaMode::PreMultiplied
-            } else {
-                wgpu::CompositeAlphaMode::Opaque // uhh
-            },
-            view_formats: vec![TEXTURE_FORMAT],
+            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+            view_formats: vec![],
         };
 
         surface.configure(&device, &surface_config);
