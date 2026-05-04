@@ -6,17 +6,21 @@ use crate::state::{
     AppState, CanvasObject, CanvasObjectOps, CanvasTool, PointerInteraction, PointerState,
 };
 use crate::ui;
-use crate::utils;
 use crate::utils::stroke::{brush_stroke_add_point, brush_stroke_end, brush_stroke_start};
 use crate::utils::ui::{apply_theme_mode_and_canvas_color, apply_window_mode};
+use crate::utils::{self, cursor_pos};
 use core::f32;
 use egui::{Pos2, Vec2};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
-use wgpu::TexelCopyTextureInfo;
-use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
+use wgpu::{
+    BackendOptions, CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo,
+    TexelCopyBufferLayout,
+};
+use wgpu::{InstanceFlags, TexelCopyTextureInfo};
 use winit::application::ApplicationHandler;
+use winit::dpi::PhysicalPosition;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
@@ -34,9 +38,13 @@ impl App {
         let mut state = AppState::default();
         let gpu_instance = wgpu::Instance::new(InstanceDescriptor {
             backends: state.persistent.graphics_api.to_backends(),
-            flags: Default::default(),
+            flags: InstanceFlags::empty(),
             memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
+            backend_options: {
+                let mut options = BackendOptions::default();
+                options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+                options
+            },
             display: None,
         });
 
@@ -64,25 +72,28 @@ impl App {
     pub async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
 
-        let icon = image::load_from_memory(ICON).expect("invalid icon data");
-
-        let rgba = icon.to_rgba8().to_vec();
-        let (width, height) = icon.dimensions();
-
-        // 设置标题
+        // title
         window.set_title("uwu");
-        let winit_icon = Some(
-            winit::window::Icon::from_rgba(rgba.clone(), width, height).expect("invalid icon data"),
-        );
-        window.set_window_icon(winit_icon.clone());
 
-        #[cfg(target_os = "windows")]
+        // icon
         {
-            use winit::platform::windows::WindowExtWindows;
-            window.set_taskbar_icon(winit_icon);
+            let icon = image::load_from_memory(ICON).expect("invalid icon data");
+            let rgba = icon.to_rgba8().to_vec();
+            let (width, height) = icon.dimensions();
+            let winit_icon = Some(
+                winit::window::Icon::from_rgba(rgba.clone(), width, height)
+                    .expect("invalid icon data"),
+            );
+            window.set_window_icon(winit_icon.clone());
+
+            #[cfg(target_os = "windows")]
+            {
+                use winit::platform::windows::WindowExtWindows;
+                window.set_taskbar_icon(winit_icon);
+            }
         }
 
-        // 获取显示模式
+        // prepare exclusive fullscreen video modes
         let monitor = window
             .current_monitor()
             .or_else(|| window.primary_monitor())
@@ -93,10 +104,24 @@ impl App {
             eprintln!("error: failed to get monitor, exclusive fullscreen mode will be unavailable")
         }
 
-        // 设置窗口模式
+        // window mode
         apply_window_mode(&mut self.state, &window);
 
-        // 获取窗口尺寸
+        #[cfg(target_os = "windows")]
+        unsafe {
+            if let Err(err) = utils::windows::enable_premultiplied_alpha(
+                utils::windows::winit_window_to_hwnd(&window).unwrap(),
+            ) {
+                eprintln!(
+                    "
+error: failed to enable premultiplied alpha for window: {:?}
+       passthrough mode might not work or app might crash",
+                    err
+                );
+            }
+        };
+
+        // prepare renderer
         let size = window.inner_size();
         let initial_width = size.width;
         let initial_height = size.height;
@@ -121,7 +146,7 @@ impl App {
 
         let ctx = state.egui_renderer.context();
 
-        // 设置主题模式
+        // colors
         apply_theme_mode_and_canvas_color(
             ctx,
             self.state.persistent.theme_mode,
@@ -193,13 +218,16 @@ impl App {
 
         render_state.egui_renderer.begin_frame(window);
 
+        // access this value in next redraw before ui to ensure that all ui has become invisible
+        let screenshot_path = self.state.screenshot_path.clone();
+
+        // fixes a borrow checker error
+        let ctx = &(render_state.egui_renderer.context().clone());
+
         // --- ui ---
-        {
+        let toolbar_rect = {
             #[cfg(feature = "profiling")]
             profiling::scope!("handle_redraw::ui");
-
-            // fixes a borrow checker bug
-            let ctx = &(render_state.egui_renderer.context().clone());
 
             #[cfg(feature = "startup_animation")]
             if let Some(anim) = &mut self.state.startup_animation {
@@ -219,7 +247,7 @@ impl App {
                 ui::ui_welcome(&mut self.state, ctx);
             }
 
-            ui::ui_toolbar(&mut self.state, ctx, window);
+            let toolbar_rect = ui::ui_toolbar(&mut self.state, ctx, window);
 
             ui::ui_pages_nav(&mut self.state, ctx);
 
@@ -228,10 +256,9 @@ impl App {
             }
 
             ui::ui_canvas(&mut self.state, ctx);
-        }
 
-        // access this value in next redraw before ui to ensure that all ui has become invisible
-        let screenshot_path = self.state.screenshot_path.clone();
+            toolbar_rect
+        };
         // --- end ui
 
         // egui render pass
@@ -365,6 +392,43 @@ impl App {
 
         surface_texture.present();
 
+        // update window passthrough state only once if disabled
+        if self.state.overlay_mode_changed && !self.state.is_overlay_mode {
+            let _ = window.set_cursor_hittest(true);
+            self.state.overlay_mode_changed = false;
+        }
+
+        // update window passthrough state every frame if enabled
+        if self.state.is_overlay_mode {
+            if self.state.current_tool == CanvasTool::Passthrough {
+                match cursor_pos::current() {
+                    Ok(pos) => {
+                        let cursor_pos = utils::ui::cursor_pos_phys_to_logic(ctx, pos);
+                        let _ = if let Some(mut rect) = toolbar_rect
+                            && {
+                                let win_pos = window
+                                    .inner_position()
+                                    .unwrap_or_else(|_| PhysicalPosition::<i32>::new(0, 0));
+                                let x = win_pos.x as f32;
+                                let y = win_pos.y as f32;
+                                rect.set_left(rect.left() + x);
+                                rect.set_top(rect.top() + y);
+                                rect.set_right(rect.right() + x);
+                                rect.set_bottom(rect.bottom() + y);
+                                rect.contains(cursor_pos)
+                            } {
+                            window.set_cursor_hittest(true)
+                        } else {
+                            window.set_cursor_hittest(false)
+                        };
+                    }
+                    Err(err) => eprintln!("failed to get cursor pos: {}", err),
+                }
+            } else {
+                let _ = window.set_cursor_hittest(true);
+            }
+        }
+
         if self.state.persistent.show_fps {
             _ = self.state.fps_counter.update();
         }
@@ -377,7 +441,8 @@ impl App {
 impl ApplicationHandler<()> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = event_loop
-            .create_window(Window::default_attributes())
+            // support transparency
+            .create_window(Window::default_attributes().with_transparent(true))
             .unwrap();
         pollster::block_on(self.set_window(window));
         // redraw on window creation
@@ -408,6 +473,7 @@ impl ApplicationHandler<()> for App {
         // don't pass RedrawRequested to egui's input handler,
         // it's not input and would make egui request a repaint, causing an infinite redraw loop
         if self.state.persistent.force_redraw_every_frame
+            || self.state.is_overlay_mode // we also need to redraw every frame since we cannot receive any event if passthrough is enabled
             || !matches!(event, WindowEvent::RedrawRequested)
         {
             let egui_needs_repaint = self
@@ -609,6 +675,13 @@ impl ApplicationHandler<()> for App {
                     },
                 }
 
+                self.window.as_ref().unwrap().request_redraw();
+            }
+            WindowEvent::CursorMoved {
+                device_id: _,
+                position,
+            } => {
+                self.state.cursor_position = position;
                 self.window.as_ref().unwrap().request_redraw();
             }
             _ => (),

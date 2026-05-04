@@ -1,7 +1,8 @@
 [package]
+
 name = "uwu"
 description = "A powerful digital whiteboard built with Rust, winit, egui, and wgpu."
-version = "0.3.0-alpha.3"
+version = "0.3.0"
 authors = ["Fey Xie <feyxiexzf@gmail.com>"]
 edition = "2024"
 repository = "https://github.com/Ujhhgtg/uwu/"
@@ -20,11 +21,9 @@ egui = { version = "0.34", default-features = false, features = [
     "serde",
     "rayon",
 ] }
-egui-winit = { version = "0.34", default-features = false, features = [
-    "wayland",
-] }
-winit = { version = "0.30", default-features = false, features = ["wayland"] }
-egui-wgpu = { version = "0.34", features = ["winit", "wayland"] }
+egui-winit = { version = "0.34", default-features = false, features = ["x11"] }
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+egui-wgpu = { version = "0.34", features = ["winit", "x11"] }
 wgpu = { version = "29", default-features = false, features = [
     "dx12",
     "metal",
@@ -77,6 +76,8 @@ winres = "*"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = { version = "0.22", default-features = false }
+x11rb = "*"
+once_cell = "*"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "*", features = [
@@ -84,14 +85,12 @@ windows = { version = "*", features = [
     "Win32_System_Com",
     "Win32_Foundation",
     "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 windows-core = { version = "*", default-features = false }
 winreg = "*"
 
 [profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
 strip = true
 debug = 0
 

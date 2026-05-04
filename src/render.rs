@@ -46,7 +46,7 @@ impl RenderState {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::default(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: match optimization_policy {
                     OptimizationPolicy::Performance => wgpu::MemoryHints::Performance,
@@ -58,17 +58,15 @@ impl RenderState {
             .await
             .expect("failed to create device");
 
-        const TEXTURE_FORMAT: TextureFormat = TextureFormat::Bgra8UnormSrgb;
-
         let surface_config = wgpu::SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-            format: TEXTURE_FORMAT,
+            format: TextureFormat::Bgra8UnormSrgb,
             width,
             height,
             present_mode,
             desired_maximum_frame_latency: 2,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![TEXTURE_FORMAT],
+            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+            view_formats: vec![],
         };
 
         surface.configure(&device, &surface_config);
@@ -242,7 +240,7 @@ impl EguiRenderer {
                         r: 0.0_f64,
                         g: 0.0_f64,
                         b: 0.0_f64,
-                        a: 1.0_f64,
+                        a: 0.0_f64,
                     }),
                     store: StoreOp::Store,
                 },
