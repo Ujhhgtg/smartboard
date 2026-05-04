@@ -645,9 +645,11 @@ pub enum OptimizationPolicy {
 /// Graphics API backend selection
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GraphicsApi {
-    #[default]
+    #[cfg_attr(not(target_os = "windows"), default)]
     Auto,
     Vulkan,
+    // on windows, using vulkan results in an 8-second hang after resizing the window, so we default to dx12 which is more stable
+    #[cfg_attr(target_os = "windows", default)]
     Dx12,
     Metal,
     WebGpu,
