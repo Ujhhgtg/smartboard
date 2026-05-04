@@ -146,7 +146,11 @@ impl App {
             .resize_surface(width, height);
     }
 
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn handle_redraw(&mut self) {
+        #[cfg(feature = "profiling")]
+        profiling::scope!("handle_redraw::setup");
+
         let render_state = self.render_state.as_mut().unwrap();
 
         let screen_descriptor = ScreenDescriptor {
@@ -185,51 +189,66 @@ impl App {
         render_state.egui_renderer.begin_frame(window);
 
         // --- ui ---
+        {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("handle_redraw::ui");
 
-        let ctx = &(render_state.egui_renderer.context().clone());
+            // fixes a borrow checker bug
+            let ctx = &(render_state.egui_renderer.context().clone());
 
-        #[cfg(feature = "startup_animation")]
-        if let Some(anim) = &mut self.state.startup_animation {
-            if !anim.is_finished() {
-                anim.update(ctx);
-                anim.draw_fullscreen(ctx);
-                ctx.request_repaint(); // ensure smooth playback
+            #[cfg(feature = "startup_animation")]
+            if let Some(anim) = &mut self.state.startup_animation {
+                if !anim.is_finished() {
+                    anim.update(ctx);
+                    anim.draw_fullscreen(ctx);
+                    ctx.request_repaint(); // ensure smooth playback
+                }
             }
-        }
 
-        self.state.toasts.show(ctx);
+            self.state.toasts.show(ctx);
+
+            #[cfg(feature = "profiling")]
+            puffin_egui::profiler_window(ctx);
+
+            if self.state.show_welcome_window {
+                ui::ui_welcome(&mut self.state, ctx);
+            }
+
+            ui::ui_toolbar(&mut self.state, ctx, window);
+
+            ui::ui_pages_nav(&mut self.state, ctx);
+
+            if self.state.show_page_management_window {
+                ui::ui_pages_manager(&mut self.state, ctx);
+            }
+
+            ui::ui_canvas(&mut self.state, ctx);
+        }
 
         // access this value in next redraw before ui to ensure that all ui has become invisible
         let screenshot_path = self.state.screenshot_path.clone();
-
-        if self.state.show_welcome_window {
-            ui::ui_welcome(&mut self.state, ctx);
-        }
-
-        ui::ui_toolbar(&mut self.state, ctx, window);
-
-        ui::ui_pages_nav(&mut self.state, ctx);
-
-        if self.state.show_page_management_window {
-            ui::ui_pages_manager(&mut self.state, ctx);
-        }
-
-        ui::ui_canvas(&mut self.state, ctx);
-
         // --- end ui
 
         // egui render pass
-        render_state.egui_renderer.end_frame_and_draw(
-            &render_state.device,
-            &render_state.queue,
-            &mut encoder,
-            window,
-            &surface_view,
-            screen_descriptor,
-        );
+        {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("handle_redraw::render_pass");
+
+            render_state.egui_renderer.end_frame_and_draw(
+                &render_state.device,
+                &render_state.queue,
+                &mut encoder,
+                window,
+                &surface_view,
+                screen_descriptor,
+            );
+        }
 
         // submit & present texture
         if let Some(path) = screenshot_path {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("handle_redraw::screenshot");
+
             let width = render_state.surface_config.width;
             let height = render_state.surface_config.height;
 
@@ -305,9 +324,9 @@ impl App {
             //     .copied()
             //     .collect::<Vec<u8>>();
 
-            // for chunk in pixels.chunks_exact_mut(4) {
-            //     chunk.swap(0, 2); // B ↔ R
-            // }
+            for chunk in pixels.chunks_exact_mut(4) {
+                chunk.swap(0, 2); // B ↔ R
+            }
 
             match image::save_buffer(path, &pixels, width, height, image::ColorType::Rgba8) {
                 Ok(_) => {
@@ -326,13 +345,18 @@ impl App {
             render_state.queue.submit(Some(encoder.finish()));
         }
 
-        self.state.canvas.objects.retain(|obj| {
-            if let CanvasObject::Image(img) = obj {
-                !img.marked_for_deletion
-            } else {
-                true
-            }
-        });
+        {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("handle_redraw::gc");
+
+            self.state.canvas.objects.retain(|obj| {
+                if let CanvasObject::Image(img) = obj {
+                    !img.marked_for_deletion
+                } else {
+                    true
+                }
+            });
+        }
 
         surface_texture.present();
 
@@ -344,6 +368,9 @@ impl App {
         if self.state.persistent.show_fps {
             _ = self.state.fps_counter.update();
         }
+
+        #[cfg(feature = "profiling")]
+        profiling::finish_frame!();
     }
 }
 

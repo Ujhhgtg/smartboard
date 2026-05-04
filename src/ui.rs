@@ -608,14 +608,12 @@ pub fn ui_toolbar_settings(state: &mut AppState, ctx: &Context, ui: &mut Ui, win
                 for i in 0..1000 {
                     let mut points = Vec::new();
 
-                    const NUM_POINTS: i32 = 100;
-
                     // 生成笔画位置
                     let start_x = (i as f32 % 20.0) * 50.0;
                     let start_y = ((i as f32 / 20.0).floor() % 15.0) * 50.0;
 
                     // 生成笔画方向和长度
-                    for j in 0..NUM_POINTS {
+                    for j in 0..100 {
                         let x = start_x + (j as f32 * 10.0);
                         let y = start_y + (j as f32 * 5.0);
 
@@ -788,6 +786,7 @@ pub fn ui_window_controls(state: &mut AppState, ui: &mut Ui, window: &Arc<Window
     });
 }
 
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn ui_pages_nav(state: &mut AppState, ctx: &Context) {
     if state.screenshot_path.is_some() {
         return;
@@ -1092,6 +1091,7 @@ pub fn ui_pages_manager(state: &mut AppState, ctx: &Context) {
         });
 }
 
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
     if state.screenshot_path.is_some() {
         return;
@@ -1304,7 +1304,7 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
                 ui.horizontal(|ui| {
                     ui.label("宽度:");
                     let slider_response =
-                        ui.add(egui::Slider::new(&mut state.brush_width, 1.0..=20.0));
+                        ui.add(egui::Slider::new(&mut state.brush_width, 1.0..=30.0));
 
                     // 显示大小预览
                     if slider_response.dragged() || slider_response.hovered() {
@@ -1447,13 +1447,21 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
 
                             ui.horizontal(|ui| {
                                 if ui.button("确认").clicked() {
-                                    // Save state to history before modification
+                                    let text_size = ui
+                                        .painter()
+                                        .layout_no_wrap(
+                                            state.new_text_content.clone(),
+                                            egui::FontId::proportional(16.0),
+                                            Color32::WHITE,
+                                        )
+                                        .size();
                                     let new_text = CanvasText {
                                         text: state.new_text_content.clone(),
                                         pos: Pos2::new(100.0, 100.0),
                                         color: Color32::WHITE,
                                         font_size: 16.0,
                                         rot: 0.0,
+                                        cached_size: Some(text_size),
                                     };
                                     let index = state.canvas.objects.len();
                                     state.history.save_add_object(
@@ -1610,6 +1618,7 @@ pub fn ui_toolbar(state: &mut AppState, ctx: &Context, window: &Arc<Window>) {
         });
 }
 
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
     #[allow(deprecated)] // seems complicated to migrate; since it works, i'm not going to fix it
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -1886,14 +1895,7 @@ pub fn ui_canvas(state: &mut AppState, ctx: &Context) {
                                 }
                             }
                             CanvasObject::Text(text) => {
-                                let text_galley = painter.layout_no_wrap(
-                                    text.text.clone(),
-                                    egui::FontId::proportional(text.font_size),
-                                    text.color,
-                                );
-                                let text_size = text_galley.size();
-                                let text_rect = egui::Rect::from_min_size(text.pos, text_size);
-                                if text_rect.contains(pos) {
+                                if text.bounding_box().contains(pos) {
                                     to_remove.push(i);
                                 }
                             }

@@ -146,7 +146,13 @@ pub fn setup_fonts(ctx: &mut Context) {
         .families
         .entry(egui::FontFamily::Proportional)
         .or_default()
-        .insert(0, font_name.to_owned());
+        .push(font_name.to_owned());
+
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .push(font_name.to_owned());
 
     ctx.set_fonts(fonts);
 }

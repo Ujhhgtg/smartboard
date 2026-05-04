@@ -147,6 +147,7 @@ impl<'a> From<&'a ArchivedCanvasStateFlat> for CanvasState {
                         ),
                         font_size: t.font_size.into(),
                         rot: t.rot.into(),
+                        cached_size: None,
                     }),
                     ArchivedCanvasObjectFlat::Shape(s) => CanvasObject::Shape(CanvasShape {
                         shape_type: match s.shape_type {

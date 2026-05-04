@@ -25,6 +25,8 @@ yay -S alsa-lib gtk3 libappindicator xdotool pkgconf
 cargo build --release
 # or with cjk font embedded
 cargo build --release --no-default-features --features embedded_font
+# or with profiling
+cargo build --release --no-default-features --features embedded_font,profiling
 ```
 
 ### cross-compiling for windows from linux
@@ -69,6 +71,12 @@ cargo build --release --target aarch64-pc-windows-gnullvm
 ## tech stack
 
 egui + wgpu + winit
+
+## credits
+
+[noto cjk](https://github.com/notofonts/noto-cjk)
+
+[maple mono](https://github.com/subframe7536/Maple-font)
 
 ## license
 

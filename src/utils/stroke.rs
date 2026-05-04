@@ -7,6 +7,7 @@ use crate::state::{
     PointerState, StrokeWidth,
 };
 
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn brush_stroke_start(state: &mut AppState, pointer_id: u64, pos: Pos2) {
     let start_time = Instant::now();
     let width = super::calculate_dynamic_width(
@@ -34,6 +35,7 @@ pub fn brush_stroke_start(state: &mut AppState, pointer_id: u64, pos: Pos2) {
     );
 }
 
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn brush_stroke_add_point(
     state: &mut AppState,
     pointer_id: u64,
@@ -106,6 +108,7 @@ pub fn brush_stroke_add_point(
     }
 }
 
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn brush_stroke_end(state: &mut AppState, pointer_id: u64) {
     // Validate stroke before removing
     let valid = state

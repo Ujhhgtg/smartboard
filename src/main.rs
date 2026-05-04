@@ -14,6 +14,9 @@ fn main() {
     #[cfg(target_os = "linux")]
     utils::linux::silence_glib_logs();
 
+    #[cfg(feature = "profiling")]
+    puffin::set_scopes_on(true);
+
     std::panic::set_hook(Box::new(|info| {
         eprintln!("panic: {info}");
         eprintln!("backtrace:\n{}", Backtrace::force_capture());

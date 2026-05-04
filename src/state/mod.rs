@@ -26,6 +26,18 @@ use std::io::Cursor;
 
 use crate::utils;
 
+/// Magic header for canvas files: `b"UWU"` followed by format version byte.
+/// Must be kept in sync with [`CANVAS_FILE_HEADER`].
+const CANVAS_FILE_MAGIC: &[u8; 3] = b"UWU";
+const CANVAS_FILE_VERSION: u8 = 1;
+
+fn make_canvas_file_header() -> [u8; 4] {
+    let mut h = [0u8; 4];
+    h[..3].copy_from_slice(CANVAS_FILE_MAGIC);
+    h[3] = CANVAS_FILE_VERSION;
+    h
+}
+
 /// Dynamic brush width mode for stroke rendering
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DynamicBrushWidthMode {
@@ -64,6 +76,7 @@ impl StrokeWidth {
         }
     }
 
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn max_width(&self) -> f32 {
         match self {
             StrokeWidth::Fixed(w) => *w,
@@ -169,6 +182,7 @@ pub struct CanvasImage {
 
 impl CanvasObjectOps for CanvasImage {
     /// Transforms the image based on the dragged handle
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -241,11 +255,13 @@ impl CanvasObjectOps for CanvasImage {
     }
 
     /// Returns the bounding rectangle of the image
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn bounding_box(&self) -> egui::Rect {
         egui::Rect::from_min_size(self.pos, self.size)
     }
 
     /// Renders the image on the canvas, drawing selection UI if selected
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn paint(&self, painter: &egui::Painter, selected: bool) {
         let img_rect = self.bounding_box();
         painter.image(
@@ -289,10 +305,12 @@ pub struct CanvasText {
     pub color: Color32,
     pub font_size: f32,
     pub rot: f32,
+    pub cached_size: Option<egui::Vec2>,
 }
 
 impl CanvasObjectOps for CanvasText {
     /// Transforms the text object, scaling font size for resize handles
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -309,26 +327,29 @@ impl CanvasObjectOps for CanvasText {
             | TransformHandle::BottomLeft
             | TransformHandle::Bottom
             | TransformHandle::BottomRight => {
-                // Scale font size based on drag delta
                 let scale_factor = 1.0 + (delta.x + delta.y) / 200.0;
                 self.font_size = (self.font_size * scale_factor).max(6.0);
+                self.cached_size = None;
             }
-            TransformHandle::Rotate => {
-                // Rotation not yet implemented for text
-            }
+            TransformHandle::Rotate => {}
         }
     }
 
-    /// Returns an approximate bounding rectangle for the text
+    /// Returns the bounding rectangle for the text
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn bounding_box(&self) -> egui::Rect {
-        // Approximate text dimensions
-        let approx_char_width = self.font_size * 0.6;
-        let approx_width = self.text.len() as f32 * approx_char_width;
-        let approx_height = self.font_size * 1.2;
-        egui::Rect::from_min_size(self.pos, egui::vec2(approx_width, approx_height))
+        if let Some(size) = self.cached_size {
+            egui::Rect::from_min_size(self.pos, size)
+        } else {
+            let approx_char_width = self.font_size * 0.6;
+            let approx_width = self.text.len() as f32 * approx_char_width;
+            let approx_height = self.font_size * 1.2;
+            egui::Rect::from_min_size(self.pos, egui::vec2(approx_width, approx_height))
+        }
     }
 
     /// Renders the text on the canvas with optional selection UI
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn paint(&self, painter: &egui::Painter, selected: bool) {
         // Draw text using egui's text rendering
         let text_galley = painter.layout_no_wrap(
@@ -382,6 +403,7 @@ pub struct CanvasShape {
 
 impl CanvasObjectOps for CanvasShape {
     /// Transforms the shape, scaling uniformly for resize handles
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -409,6 +431,7 @@ impl CanvasObjectOps for CanvasShape {
     }
 
     /// Returns the bounding rectangle of the shape with padding for handles
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn bounding_box(&self) -> egui::Rect {
         match self.shape_type {
             CanvasShapeType::Line => {
@@ -449,6 +472,7 @@ impl CanvasObjectOps for CanvasShape {
     }
 
     /// Renders the shape and optional selection UI
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn paint(&self, painter: &egui::Painter, selected: bool) {
         // Draw the shape itself
         match self.shape_type {
@@ -527,6 +551,7 @@ pub enum CanvasObject {
 
 impl CanvasObject {
     /// Moves an object by the specified delta vector
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn move_object(object: &mut CanvasObject, delta: egui::Vec2) {
         match object {
             CanvasObject::Image(img) => {
@@ -576,6 +601,7 @@ impl CanvasObject {
 
 impl CanvasObjectOps for CanvasObject {
     /// Delegates transform to the inner object type
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -594,6 +620,7 @@ impl CanvasObjectOps for CanvasObject {
     }
 
     /// Delegates painting to the inner object type
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn paint(&self, painter: &egui::Painter, selected: bool) {
         match self {
             CanvasObject::Stroke(stroke) => stroke.paint(painter, selected),
@@ -604,6 +631,7 @@ impl CanvasObjectOps for CanvasObject {
     }
 
     /// Delegates bounding box calculation to the inner object type
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn bounding_box(&self) -> egui::Rect {
         match self {
             CanvasObject::Stroke(stroke) => stroke.bounding_box(),
@@ -679,10 +707,29 @@ pub struct PageState {
 }
 
 impl CanvasState {
+    const HEADER_SIZE: usize = 4;
+
     /// Loads canvas state from a file using rkyv binary format
     pub fn load_from_file(path: &std::path::PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         let bytes = std::fs::read(path)?;
-        let archived = rkyv::access::<flat::ArchivedCanvasStateFlat, rkyv::rancor::Error>(&bytes)
+
+        if bytes.len() < Self::HEADER_SIZE
+            || bytes[..3] != *CANVAS_FILE_MAGIC
+            || bytes[3] != CANVAS_FILE_VERSION
+        {
+            let actual = if bytes.len() >= 4 {
+                format!("magic={:02x?}, version={}", &bytes[..3], bytes[3])
+            } else {
+                format!("too short ({} bytes)", bytes.len())
+            };
+            return Err(format!(
+                "unsupported canvas file format: expected magic=UWU, version={CANVAS_FILE_VERSION}, got {actual}"
+            )
+            .into());
+        }
+
+        let payload = &bytes[Self::HEADER_SIZE..];
+        let archived = rkyv::access::<flat::ArchivedCanvasStateFlat, rkyv::rancor::Error>(payload)
             .map_err(|e| format!("rkyv error: {e}"))?;
         Ok(Self::from(archived))
     }
@@ -693,9 +740,15 @@ impl CanvasState {
         path: &std::path::PathBuf,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let flat = CanvasStateFlat::from(self);
-        let bytes =
+        let payload =
             rkyv::to_bytes::<rkyv::rancor::Error>(&flat).map_err(|e| format!("rkyv error: {e}"))?;
-        std::fs::write(path, bytes.as_slice())?;
+
+        let header = make_canvas_file_header();
+        let mut out = Vec::with_capacity(Self::HEADER_SIZE + payload.len());
+        out.extend_from_slice(&header);
+        out.extend_from_slice(payload.as_slice());
+
+        std::fs::write(path, out)?;
         Ok(())
     }
 
@@ -848,6 +901,7 @@ pub struct CanvasStroke {
 }
 
 impl CanvasStroke {
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn scale_stroke_points(stroke: &mut CanvasStroke, center: Pos2, scale_x: f32, scale_y: f32) {
         for point in &mut stroke.points {
             let relative = *point - center;
@@ -876,6 +930,7 @@ impl CanvasStroke {
 }
 
 impl CanvasObjectOps for CanvasStroke {
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn transform(
         &mut self,
         handle: TransformHandle,
@@ -955,6 +1010,7 @@ impl CanvasObjectOps for CanvasStroke {
         }
     }
 
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn bounding_box(&self) -> egui::Rect {
         if self.points.is_empty() {
             return egui::Rect::from_min_max(Pos2::ZERO, Pos2::ZERO);
@@ -983,27 +1039,30 @@ impl CanvasObjectOps for CanvasStroke {
         )
     }
 
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn paint(&self, painter: &egui::Painter, selected: bool) {
         let color = if selected { Color32::BLUE } else { self.color };
 
         // Apply rotation if needed
-        let rotated_points: Vec<Pos2> = if self.rot.abs() > 0.001 {
+        let rotated_points: std::borrow::Cow<'_, [Pos2]> = if self.rot.abs() > 0.001 {
             let center = self.bounding_box().center();
-            self.points
-                .iter()
-                .map(|p| {
-                    let dx = p.x - center.x;
-                    let dy = p.y - center.y;
-                    let cos_rot = self.rot.cos();
-                    let sin_rot = self.rot.sin();
-                    Pos2::new(
-                        center.x + dx * cos_rot - dy * sin_rot,
-                        center.y + dx * sin_rot + dy * cos_rot,
-                    )
-                })
-                .collect()
+            let cos_rot = self.rot.cos();
+            let sin_rot = self.rot.sin();
+            std::borrow::Cow::Owned(
+                self.points
+                    .iter()
+                    .map(|p| {
+                        let dx = p.x - center.x;
+                        let dy = p.y - center.y;
+                        Pos2::new(
+                            center.x + dx * cos_rot - dy * sin_rot,
+                            center.y + dx * sin_rot + dy * cos_rot,
+                        )
+                    })
+                    .collect(),
+            )
         } else {
-            self.points.clone()
+            std::borrow::Cow::Borrowed(&self.points)
         };
 
         painter.add(egui::Shape::Circle(egui::epaint::CircleShape::filled(
@@ -1025,8 +1084,10 @@ impl CanvasObjectOps for CanvasStroke {
                             Stroke::new(*w, color),
                         );
                     } else {
-                        let path =
-                            egui::epaint::PathShape::line(rotated_points, Stroke::new(*w, color));
+                        let path = egui::epaint::PathShape::line(
+                            rotated_points.into_owned(),
+                            Stroke::new(*w, color),
+                        );
                         painter.add(egui::Shape::Path(path));
                     }
                 }
@@ -1071,6 +1132,7 @@ impl FpsCounter {
         }
     }
 
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn update(&mut self) -> f32 {
         self.frame_count += 1;
 
@@ -1449,6 +1511,7 @@ impl History {
             CanvasObject::Text(text) => {
                 text.pos = transform.pos;
                 text.font_size = transform.size.x;
+                text.cached_size = None;
             }
             CanvasObject::Shape(shape) => {
                 shape.pos = transform.pos;

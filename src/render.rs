@@ -58,15 +58,7 @@ impl RenderState {
             .await
             .expect("failed to create device");
 
-        // let swapchain_capabilities = surface.get_capabilities(&adapter);
-        // let selected_format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        // let swapchain_format = swapchain_capabilities
-        //     .formats
-        //     .iter()
-        //     .find(|d| **d == selected_format)
-        //     .expect("failed to select proper surface texture format");
-
-        const TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+        const TEXTURE_FORMAT: TextureFormat = TextureFormat::Bgra8UnormSrgb;
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
@@ -81,9 +73,16 @@ impl RenderState {
 
         surface.configure(&device, &surface_config);
 
-        let egui_renderer = EguiRenderer::new(&device, surface_config.format, None, 1, window);
+        const SCALE_FACTOR: f32 = 1.0;
 
-        let scale_factor = 1.0;
+        let egui_renderer = EguiRenderer::new(
+            &device,
+            surface_config.format,
+            None,
+            1,
+            window,
+            SCALE_FACTOR,
+        );
 
         Self {
             device,
@@ -91,7 +90,7 @@ impl RenderState {
             surface,
             surface_config,
             egui_renderer,
-            scale_factor,
+            scale_factor: SCALE_FACTOR,
         }
     }
 
@@ -111,6 +110,7 @@ pub struct EguiRenderer {
     state: State,
     renderer: Renderer,
     frame_started: bool,
+    pixels_per_point: f32,
 }
 
 impl EguiRenderer {
@@ -124,13 +124,14 @@ impl EguiRenderer {
         output_depth_format: Option<TextureFormat>,
         msaa_samples: u32,
         window: &Window,
+        pixels_per_point: f32,
     ) -> EguiRenderer {
         let mut egui_context = Context::default();
 
         utils::ui::setup_fonts(&mut egui_context);
 
         let egui_state = egui_winit::State::new(
-            egui_context,
+            egui_context.clone(),
             egui::viewport::ViewportId::ROOT,
             &window,
             Some(window.scale_factor() as f32),
@@ -147,11 +148,17 @@ impl EguiRenderer {
                 predictable_texture_filtering: false,
             },
         );
+        egui_context.set_pixels_per_point(pixels_per_point);
+        egui_context.memory_mut(|memory| {
+            memory.options.tessellation_options.prerasterized_discs = true;
+            memory.options.tessellation_options.parallel_tessellation = true;
+        });
 
         EguiRenderer {
             state: egui_state,
             renderer: egui_renderer,
             frame_started: false,
+            pixels_per_point,
         }
     }
 
@@ -159,16 +166,14 @@ impl EguiRenderer {
         self.state.on_window_event(window, event).repaint
     }
 
-    pub fn ppp(&mut self, v: f32) {
-        self.context().set_pixels_per_point(v);
-    }
-
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn begin_frame(&mut self, window: &Window) {
         let raw_input = self.state.take_egui_input(window);
         self.state.egui_ctx().begin_pass(raw_input);
         self.frame_started = true;
     }
 
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn end_frame_and_draw(
         &mut self,
         device: &Device,
@@ -182,23 +187,51 @@ impl EguiRenderer {
             panic!("begin_frame must be called before end_frame_and_draw is called");
         }
 
-        self.ppp(screen_descriptor.pixels_per_point);
-
         let full_output = self.state.egui_ctx().end_pass();
 
         self.state
             .handle_platform_output(window, full_output.platform_output);
 
-        let tris = self
-            .state
-            .egui_ctx()
-            .tessellate(full_output.shapes, self.state.egui_ctx().pixels_per_point());
-        for (id, image_delta) in &full_output.textures_delta.set {
-            self.renderer
-                .update_texture(device, queue, *id, image_delta);
+        let tris = {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("egui::tessellate");
+            // println!("total shapes: {}", &full_output.shapes.len());
+            // println!(
+            //     "path shapes: {}",
+            //     &full_output
+            //         .shapes
+            //         .iter()
+            //         .filter(|s| {
+            //             {
+            //                 if let egui::Shape::Path(path) = &s.shape
+            //                     && path.points.len() > 32
+            //                 {
+            //                     true
+            //                 } else {
+            //                     false
+            //                 }
+            //             }
+            //         })
+            //         .count()
+            // );
+            self.state
+                .egui_ctx()
+                .tessellate(full_output.shapes, self.pixels_per_point)
+        };
+        {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("egui::update_textures");
+            for (id, image_delta) in &full_output.textures_delta.set {
+                self.renderer
+                    .update_texture(device, queue, *id, image_delta);
+            }
         }
-        self.renderer
-            .update_buffers(device, queue, encoder, &tris, &screen_descriptor);
+        {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("egui::update_buffers");
+            self.renderer
+                .update_buffers(device, queue, encoder, &tris, &screen_descriptor);
+        }
         let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("egui main render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -221,10 +254,18 @@ impl EguiRenderer {
             multiview_mask: None,
         });
 
-        self.renderer
-            .render(&mut rpass.forget_lifetime(), &tris, &screen_descriptor);
-        for x in &full_output.textures_delta.free {
-            self.renderer.free_texture(x)
+        {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("egui::render");
+            self.renderer
+                .render(&mut rpass.forget_lifetime(), &tris, &screen_descriptor);
+        }
+        {
+            #[cfg(feature = "profiling")]
+            profiling::scope!("egui::free_textures");
+            for x in &full_output.textures_delta.free {
+                self.renderer.free_texture(x)
+            }
         }
 
         self.frame_started = false;

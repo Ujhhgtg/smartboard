@@ -16,6 +16,7 @@ use ttf_parser::{Face, OutlineBuilder};
 use crate::state::{CanvasStroke, DynamicBrushWidthMode, StrokeWidth, TransformHandle};
 
 // 检查点是否与笔画相交（用于对象橡皮擦）
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn point_intersects_stroke(pos: Pos2, stroke: &CanvasStroke, eraser_size: f32) -> bool {
     let eraser_radius = eraser_size / 2.0;
     if stroke.points.len() == 1 {
@@ -39,6 +40,7 @@ pub fn point_intersects_stroke(pos: Pos2, stroke: &CanvasStroke, eraser_size: f3
 }
 
 // 计算点到线段的最短距离
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn point_to_line_segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let ab = Pos2::new(b.x - a.x, b.y - a.y);
     let ap = Pos2::new(p.x - a.x, p.y - a.y);
@@ -55,6 +57,7 @@ pub fn point_to_line_segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 }
 
 // 计算动态画笔宽度
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn calculate_dynamic_width(
     base_width: f32,
     mode: DynamicBrushWidthMode,
@@ -94,6 +97,7 @@ pub fn calculate_dynamic_width(
 }
 
 // 插值算法 - 在点之间插入中间点
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn apply_point_interpolation_in_place(
     points: &mut Vec<Pos2>,
     width: &StrokeWidth,
@@ -171,6 +175,7 @@ pub fn apply_point_interpolation_in_place(
 }
 
 #[must_use]
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn apply_stroke_smoothing(points: &[Pos2]) -> Vec<Pos2> {
     if points.len() < 3 {
         return points.to_vec();
@@ -261,6 +266,7 @@ pub fn apply_stroke_smoothing(points: &[Pos2]) -> Vec<Pos2> {
 }
 
 // 判断笔画是否近似一条直线
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn is_stroke_linear(points: &[Pos2], tolerance: f32) -> bool {
     if points.len() < 3 {
         return true;
@@ -295,6 +301,7 @@ pub fn is_stroke_linear(points: &[Pos2], tolerance: f32) -> bool {
 }
 
 // 拉直笔画
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn straighten_stroke(points: &[Pos2], tolerance: f32) -> Vec<Pos2> {
     if is_stroke_linear(points, tolerance) {
         match points.len() {
@@ -402,7 +409,7 @@ pub fn straighten_stroke(points: &[Pos2], tolerance: f32) -> Vec<Pos2> {
 
 pub fn draw_size_preview(painter: &Painter, pos: Pos2, size: f32) {
     const SIZE_PREVIEW_BORDER_WIDTH: f32 = 2.0;
-    let radius = size / SIZE_PREVIEW_BORDER_WIDTH;
+    let radius = size / 2.0;
     painter.circle_filled(pos, radius, Color32::WHITE);
     painter.circle_stroke(
         pos,
@@ -457,6 +464,7 @@ pub fn get_default_canvas_color() -> Color32 {
 }
 
 // 绘制调整句柄
+#[cfg_attr(feature = "profiling", profiling::function)]
 pub fn draw_resize_handles(painter: &egui::Painter, bbox: Rect) {
     let handle_size = 12.0;
     let handle_stroke = Stroke::new(1.0_f32, Color32::WHITE);
