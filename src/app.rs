@@ -14,7 +14,7 @@ use egui::{Pos2, Vec2};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
-use wgpu::{Backends, TexelCopyTextureInfo};
+use wgpu::TexelCopyTextureInfo;
 use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
@@ -33,9 +33,7 @@ impl App {
     pub fn new() -> Self {
         let mut state = AppState::default();
         let gpu_instance = wgpu::Instance::new(InstanceDescriptor {
-            backends: if cfg!(target_os = "windows") { // on windows, using vulkan results in a hang after resizing the window, so we default to dx12 which is more stable
-                Backends::DX12
-            } else { state.persistent.graphics_api.to_backends() },
+            backends: state.persistent.graphics_api.to_backends(),
             flags: Default::default(),
             memory_budget_thresholds: Default::default(),
             backend_options: Default::default(),
@@ -443,9 +441,7 @@ impl ApplicationHandler<()> for App {
                 self.handle_redraw();
             }
             WindowEvent::Resized(new_size) => {
-                if new_size.width > 0
-                    && new_size.height > 0
-                {
+                if new_size.width > 0 && new_size.height > 0 {
                     self.handle_resized(new_size.width, new_size.height);
                     self.window.as_ref().unwrap().request_redraw();
                 }
