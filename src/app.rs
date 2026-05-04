@@ -14,9 +14,10 @@ use egui::{Pos2, Vec2};
 use egui_wgpu::{ScreenDescriptor, wgpu};
 use image::GenericImageView;
 use std::sync::Arc;
-use wgpu::TexelCopyTextureInfo;
 use wgpu::{CurrentSurfaceTexture, InstanceDescriptor, TexelCopyBufferInfo, TexelCopyBufferLayout};
+use wgpu::{InstanceFlags, TexelCopyTextureInfo};
 use winit::application::ApplicationHandler;
+use winit::dpi::PhysicalPosition;
 use winit::event::{KeyEvent, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
@@ -33,8 +34,15 @@ impl App {
     pub fn new() -> Self {
         let mut state = AppState::default();
         let gpu_instance = egui_wgpu::wgpu::Instance::new(InstanceDescriptor {
-            backends: state.persistent.graphics_api.to_backends(),
-            flags: Default::default(),
+            backends: {
+                if cfg!(not(target_os = "windows")) {
+                    state.persistent.graphics_api.to_backends()
+                } else {
+                    // I HATE YOU WINDOWS!!!!
+                    wgpu::Backends::DX12
+                }
+            },
+            flags: InstanceFlags::empty(),
             memory_budget_thresholds: Default::default(),
             backend_options: Default::default(),
             display: None,
@@ -64,8 +72,10 @@ impl App {
     pub async fn set_window(&mut self, window: Window) {
         let window = Arc::new(window);
 
+        // title
         window.set_title("uwu");
 
+        // icon
         {
             let icon = image::load_from_memory(ICON).expect("invalid icon data");
             let rgba = icon.to_rgba8().to_vec();
@@ -83,7 +93,7 @@ impl App {
             }
         }
 
-        // 获取显示模式
+        // prepare exclusive fullscreen video modes
         let monitor = window
             .current_monitor()
             .or_else(|| window.primary_monitor())
@@ -94,10 +104,24 @@ impl App {
             eprintln!("error: failed to get monitor, exclusive fullscreen mode will be unavailable")
         }
 
-        // 设置窗口模式
+        // window mode
         apply_window_mode(&mut self.state, &window);
 
-        // 获取窗口尺寸
+        #[cfg(target_os = "windows")]
+        unsafe {
+            if let Err(err) = utils::windows::enable_premultiplied_alpha(
+                utils::windows::winit_window_to_hwnd(&window).unwrap(),
+            ) {
+                eprintln!(
+                    "
+error: failed to enable premultiplied alpha for window: {:?}
+       passthrough mode might not work or app might crash",
+                    err
+                );
+            }
+        };
+
+        // prepare renderer
         let size = window.inner_size();
         let initial_width = size.width;
         let initial_height = size.height;
@@ -122,7 +146,7 @@ impl App {
 
         let ctx = state.egui_renderer.context();
 
-        // 设置主题模式
+        // colors
         apply_theme_mode_and_canvas_color(
             ctx,
             self.state.persistent.theme_mode,
@@ -207,7 +231,6 @@ impl App {
             ui::ui_welcome(&mut self.state, ctx);
         }
 
-        // let toolbar_rect = ui::ui_toolbar(&mut self.state, ctx, window);
         let toolbar_rect = ui::ui_toolbar(&mut self.state, ctx, window);
 
         // let pages_nav_rects = ui::ui_pages_nav(&mut self.state, ctx);
@@ -359,13 +382,19 @@ impl App {
             match cursor_pos::current() {
                 Ok(pos) => {
                     let cursor_pos = utils::ui::cursor_pos_phys_to_logic(ctx, pos);
-                    println!(
-                        "cursor pos: {:?}, logical pos: {:?}, toolbar rect: {:?}",
-                        pos, cursor_pos, toolbar_rect
-                    );
-                    let _ = if let Some(rect) = toolbar_rect
-                        && rect.contains(cursor_pos)
-                    {
+                    let _ = if let Some(mut rect) = toolbar_rect
+                        && {
+                            let win_pos = window
+                                .inner_position()
+                                .unwrap_or_else(|_| PhysicalPosition::<i32>::new(0, 0));
+                            let x = win_pos.x as f32;
+                            let y = win_pos.y as f32;
+                            rect.set_left(rect.left() + x);
+                            rect.set_top(rect.top() + y);
+                            rect.set_right(rect.right() + x);
+                            rect.set_bottom(rect.bottom() + y);
+                            rect.contains(cursor_pos)
+                        } {
                         window.set_cursor_hittest(true)
                     } else {
                         window.set_cursor_hittest(false)

@@ -786,17 +786,7 @@ pub fn ui_window_controls(state: &mut AppState, ui: &mut Ui, window: &Arc<Window
                         return;
                     }
 
-                    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
-
-                    let handle = window.window_handle();
-                    let hwnd = if let Ok(handle) = handle
-                        && let RawWindowHandle::Win32(raw) = handle.as_raw()
-                    {
-                        Some(windows::Win32::Foundation::HWND(raw.hwnd.get() as _))
-                    } else {
-                        None
-                    };
-
+                    let hwnd = utils::windows::winit_window_to_hwnd(window);
                     let _ = utils::windows::toggle_touch_keyboard(hwnd);
                 }
             });

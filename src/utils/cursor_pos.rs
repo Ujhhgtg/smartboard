@@ -2,6 +2,7 @@ pub type Point = winit::dpi::PhysicalPosition<f64>;
 
 #[derive(Debug)]
 pub enum CursorPosError {
+    #[allow(unused)]
     Unsupported(&'static str),
     Os(&'static str),
 }
@@ -23,27 +24,19 @@ pub fn current() -> Result<Point, CursorPosError> {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use windows::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetPhysicalCursorPos};
+
     use super::{CursorPosError, Point};
 
-    #[repr(C)]
-    struct POINT {
-        x: i32,
-        y: i32,
-    }
-
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn GetPhysicalCursorPos(lpPoint: *mut POINT) -> i32;
-    }
-
     pub fn current_cursor_position() -> Result<Point, CursorPosError> {
-        let mut p = POINT { x: 0, y: 0 };
-        let ok = unsafe { GetPhysicalCursorPos(&mut p as *mut POINT) };
+        let mut point = POINT { x: 0, y: 0 };
 
-        if ok != 0 {
+        let success = unsafe { GetPhysicalCursorPos(&mut point) }.is_ok();
+
+        if success {
             Ok(Point {
-                x: p.x as f64,
-                y: p.y as f64,
+                x: point.x as f64,
+                y: point.y as f64,
             })
         } else {
             Err(CursorPosError::Os("GetPhysicalCursorPos failed"))

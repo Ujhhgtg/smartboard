@@ -56,6 +56,17 @@ rodio = { version = "*", default-features = false, features = [
 ], optional = true }
 fontdb = { version = "*", optional = true }
 
+[patch.crates-io]
+wgpu = { git = "https://github.com/Ujhhgtg/wgpu.git", branch = "v29" }
+wgpu-core = { git = "https://github.com/Ujhhgtg/wgpu.git", branch = "v29" }
+wgpu-hal = { git = "https://github.com/Ujhhgtg/wgpu.git", branch = "v29" }
+wgpu-types = { git = "https://github.com/Ujhhgtg/wgpu.git", branch = "v29" }
+naga = { git = "https://github.com/Ujhhgtg/wgpu.git", branch = "v29" }
+wgpu-naga-bridge = { git = "https://github.com/Ujhhgtg/wgpu.git", branch = "v29" }
+# unused
+# wgpu-info = { git = "https://github.com/Ujhhgtg/wgpu.git", branch = "v29" }
+# wgpu-macros = { git = "https://github.com/Ujhhgtg/wgpu.git", branch = "v29" }
+
 [build-dependencies]
 shellexpand = "*"
 winres = "*"
@@ -71,6 +82,7 @@ windows = { version = "*", features = [
     "Win32_System_Com",
     "Win32_Foundation",
     "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 windows-core = { version = "*", default-features = false }
 winreg = "*"

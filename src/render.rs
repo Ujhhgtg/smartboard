@@ -46,7 +46,7 @@ impl RenderState {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::default(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: match optimization_policy {
                     OptimizationPolicy::Performance => wgpu::MemoryHints::Performance,
@@ -67,9 +67,15 @@ impl RenderState {
             height,
             present_mode,
             desired_maximum_frame_latency: 2,
-            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied, // support transparency
+            alpha_mode: if cfg!(not(target_os = "windows")) {
+                wgpu::CompositeAlphaMode::PreMultiplied
+            } else {
+                wgpu::CompositeAlphaMode::Opaque // uhh
+            },
             view_formats: vec![TEXTURE_FORMAT],
         };
+
+        dbg!(surface.get_capabilities(&adapter));
 
         surface.configure(&device, &surface_config);
 
