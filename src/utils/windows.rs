@@ -75,7 +75,7 @@ pub fn winit_window_to_hwnd(window: &Arc<Window>) -> Option<HWND> {
 pub unsafe fn enable_premultiplied_alpha(hwnd: HWND) -> windows::core::Result<()> {
     let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
 
-    let new_ex_style = ex_style | WS_EX_LAYERED.0 as u32 | WS_EX_COMPOSITED.0 as u32;
+    let new_ex_style = ex_style | WS_EX_LAYERED.0 | WS_EX_COMPOSITED.0;
 
     unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex_style as isize) };
 

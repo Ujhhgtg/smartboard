@@ -506,11 +506,9 @@ impl ApplicationHandler<()> for App {
             WindowEvent::RedrawRequested => {
                 self.handle_redraw();
             }
-            WindowEvent::Resized(new_size) => {
-                if new_size.width > 0 && new_size.height > 0 {
-                    self.handle_resized(new_size.width, new_size.height);
-                    self.window.as_ref().unwrap().request_redraw();
-                }
+            WindowEvent::Resized(new_size) if new_size.width > 0 && new_size.height > 0 => {
+                self.handle_resized(new_size.width, new_size.height);
+                self.window.as_ref().unwrap().request_redraw();
             }
             WindowEvent::Touch(Touch {
                 phase,

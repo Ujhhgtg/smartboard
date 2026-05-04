@@ -898,7 +898,7 @@ pub fn ui_pages_nav(state: &mut AppState, ctx: &Context) -> Option<(Rect, Rect)>
         return Some((win1, win2));
     }
 
-    return None;
+    None
 }
 
 fn apply_page_action(state: &mut AppState, action: PageAction) {
